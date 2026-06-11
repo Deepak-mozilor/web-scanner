@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Commands
 
-All commands run from `lighthouse-scanner/`:
+All commands run from the repo root:
 
 ```bash
 npm run build      # tsc → dist/
