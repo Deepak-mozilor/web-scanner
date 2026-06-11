@@ -29,9 +29,11 @@ export async function runScan(options: ScanOptions): Promise<RunnerResult> {
   // Dynamic import because lighthouse 10+ is ESM-only
   const { default: lighthouse } = await import('lighthouse');
 
+  console.log(`[scanner] launching Chrome`);
   const chrome = await chromeLauncher.launch({
     chromeFlags: ['--headless', '--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage'],
   });
+  console.log(`[scanner] Chrome ready on port ${chrome.port}`);
 
   const flags = {
     port: chrome.port,
@@ -47,10 +49,13 @@ export async function runScan(options: ScanOptions): Promise<RunnerResult> {
   );
 
   try {
+    console.log(`[scanner] running Lighthouse on ${url}`);
     const result = await Promise.race([lighthouse(url, flags), timeoutPromise]);
     if (!result) throw new Error('Lighthouse returned no result');
+    console.log(`[scanner] Lighthouse finished`);
     return result;
   } finally {
     await chrome.kill();
+    console.log(`[scanner] Chrome killed`);
   }
 }

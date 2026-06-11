@@ -36,12 +36,16 @@ app.post('/scan', async (req: Request<object, object, ScanBody>, res: Response) 
     return;
   }
 
+  console.log(`[scan] start  url=${url} strategy=${strategy}`);
+  const t0 = Date.now();
   try {
     const raw = await runScan({ url, strategy, categories, timeout });
     const data = parseResults(raw, strategy);
+    console.log(`[scan] done   url=${url} elapsed=${Date.now() - t0}ms`);
     res.json({ success: true, data });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error';
+    console.error(`[scan] error  url=${url} elapsed=${Date.now() - t0}ms error=${message}`);
     res.status(500).json({ success: false, error: message });
   }
 });
