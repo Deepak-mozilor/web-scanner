@@ -1,143 +1,36 @@
-# Web Scanner
+# CLAUDE.md
 
-Express API that wraps Lighthouse to scan URLs and return structured audit results. Single-file-per-concern: server validates, scanner runs Chrome, parser transforms output.
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## Commands
 
+All commands run from the repo root:
+
 ```bash
-npm run dev        # ts-node index.ts (no build needed)
 npm run build      # tsc → dist/
-npm run start      # node dist/index.js (requires build first)
+npm run start      # node dist/index.js  (requires build first)
+npm run dev        # ts-node index.ts    (no build needed)
 ```
 
-No tests or linter configured.
+There are no tests or a linter configured.
 
 ## Architecture
 
-```
-index.ts          → starts HTTP listener on $PORT (default 3000)
-src/server.ts     → Express app, input validation, rate limiting, SSRF guard
-src/scanner.ts    → launches Chrome via chrome-launcher, runs Lighthouse, kills Chrome
-src/parser.ts     → transforms RunnerResult into ParsedResult
-```
+This is a single Express API that wraps [Lighthouse](https://github.com/GoogleChrome/lighthouse) to scan URLs and return structured audit results.
 
-**Request flow:** `POST /scan` → `runScan()` → `parseResults()` → JSON response
+**Request flow:**
+1. `POST /scan` in `src/server.ts` validates the request body and calls `runScan()`
+2. `src/scanner.ts` launches Chrome via `chrome-launcher`, runs Lighthouse, then kills Chrome
+3. `src/parser.ts` transforms the raw `RunnerResult` into a structured `ParsedResult`
+4. `src/server.ts` returns the parsed result as JSON
 
-## Key Design Constraints
+**Key design details:**
+- Lighthouse 10+ is ESM-only; it is dynamically imported inside `runScan()` to avoid CJS/ESM conflict with the rest of the codebase (which is compiled as CommonJS per `tsconfig.json`).
+- `parser.ts` classifies audits into `critical` (score === 0), `nonCritical` (0 < score < 0.9), and `passed` (score ≥ 0.9), then groups them again by Lighthouse category (`byCategory`). The flat lists and the per-category breakdown both reference the same `AuditItem` objects.
+- `src/scanner.ts` emits a `RunnerResult`; `src/parser.ts` owns all interpretation. The entry point `index.ts` only starts the HTTP listener.
 
-- **ESM/CJS conflict**: Lighthouse 10+ is ESM-only. It is dynamically imported inside `runScan()` to avoid a CJS/ESM module conflict — the rest of the codebase compiles as CommonJS (`tsconfig.json`). Do not move the import to the top of the file.
-- **Audit classification**: `parser.ts` classifies audits as `critical` (score === 0), `nonCritical` (0 < score < 0.9), or `passed` (score ≥ 0.9). Only `binary`, `numeric`, and `metricSavings` score modes are included — `informative`, `manual`, and `notApplicable` audits are excluded from the scored lists.
-- **Informative audits accessed directly**: `network-requests` and `resource-summary` are `informative`-mode (no score) and are pulled directly from `lhr.audits[id]` rather than through the scoreable filter.
-- **`byCategory` shares references**: The flat `critical`/`nonCritical`/`passed` lists and the per-category breakdown reference the same `AuditItem` objects — do not deep-clone them.
-
-## API
-
-### `POST /scan`
-
-```json
-{
-  "url": "https://example.com",       // required — must be public http/https
-  "strategy": "desktop",              // optional — "desktop" | "mobile" (default: "desktop")
-  "categories": ["performance"],      // optional — subset of allowed list below
-  "timeout": 60000                    // optional — ms, 5000–120000 (default: 60000)
-}
-```
-
-Allowed categories: `performance`, `accessibility`, `best-practices`, `seo`, `pwa`
-
-### `GET /health`
-
-Returns `{ status: "ok", timestamp: "..." }`
-
-## Response Shape (`ParsedResult`)
-
-```typescript
-{
-  url: string                         // final displayed URL after redirects
-  fetchTime: string                   // ISO-8601 timestamp
-  lighthouseVersion: string
-  strategy: string
-  runWarnings: string[]               // scan-level warnings from Lighthouse
-
-  scores: {                           // per-category score 0–100
-    [category]: { score, title, description }
-  }
-
-  metrics: {                          // core web vitals + perf metrics
-    "first-contentful-paint": { value, displayValue, score, numericUnit }
-    "largest-contentful-paint": { ... }
-    "total-blocking-time": { ... }
-    "cumulative-layout-shift": { ... }
-    "interactive": { ... }
-    "speed-index": { ... }
-  }
-
-  summary: { total, passed, critical, nonCritical }
-
-  passed: [{ id, title }]            // audits with score ≥ 0.9
-
-  byCategory: {                       // audits grouped by Lighthouse category
-    [category]: {
-      score, title,
-      critical: AuditItem[],
-      nonCritical: AuditItem[],
-      passed: [{ id, title }]
-    }
-  }
-
-  networkRequests: [{                 // every URL loaded by the page
-    url, protocol, resourceType, mimeType,
-    statusCode, transferSize, resourceSize,
-    startTime, endTime,              // ms from navigation start
-    entity?                          // third-party name if known
-  }]
-
-  resourceSummary: [{                 // totals per resource type
-    resourceType, label, requestCount, transferSize
-  }]
-  // resourceType values: total, document, script, stylesheet,
-  //                      image, media, font, other, third-party
-
-  entities: [{                        // third-party services detected
-    name, isFirstParty, origins,
-    homepage?, category?
-  }]
-
-  screenshots: {
-    final: string | null             // base64 data URL
-    fullPage: string | null          // base64 data URL
-    filmstrip: [{ timing, data }]    // frames as base64 data URLs
-  }
-}
-```
-
-### `AuditItem` shape
-
-```typescript
-{
-  id, title, description,
-  learnMoreUrl?,                      // extracted from Lighthouse description markdown
-  displayValue,                       // human-readable string e.g. "1.2 s"
-  score,                              // 0–100
-  detailsType,                        // "table" | "opportunity" | "list" | etc.
-  itemCount?,
-  wastedBytes?,
-  wastedMs?,
-  items?                              // raw Lighthouse detail rows — shape varies by audit
-}
-```
-
-## Security
-
-All validation is in `src/server.ts`:
-
-- **Rate limit**: `POST /scan` capped at 10 req/min per IP (`express-rate-limit`)
-- **SSRF**: rejects non-http/https schemes and private IP ranges — `10.x`, `192.168.x`, `172.16–31.x`, `169.254.x` (AWS metadata), `localhost`, IPv6 loopback
-- **Input allowlist**: `categories` validated against fixed set; `timeout` bounded to 5,000–120,000 ms
-- **Error sanitization**: scan errors return `"Scan failed"` to callers; full detail in server logs only
-
-## Environment
-
-```bash
-PORT=3000   # HTTP port (default: 3000)
-```
+**Security measures in place (`src/server.ts`):**
+- Rate limiting: `POST /scan` is capped at 10 requests/min per IP via `express-rate-limit`
+- SSRF protection: URLs are rejected if they use non-http(s) schemes or resolve to private/internal IP ranges (`10.x`, `192.168.x`, `172.16–31.x`, `169.254.x`, `localhost`, IPv6 loopback)
+- Input validation: `categories` is checked against an allowlist (`performance`, `accessibility`, `best-practices`, `seo`, `pwa`); `timeout` is bounded to 5,000–120,000ms
+- Error sanitization: scan errors return a generic message to callers; full error detail is logged server-side only
