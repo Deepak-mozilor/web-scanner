@@ -58,16 +58,68 @@ export interface Screenshots {
   filmstrip: FilmstripFrame[];
 }
 
+export interface NetworkRequest {
+  url: string;
+  protocol: string;
+  resourceType: string;
+  mimeType: string;
+  statusCode: number;
+  transferSize: number;
+  resourceSize: number;
+  startTime: number;
+  endTime: number;
+  entity?: string;
+}
+
+export interface ResourceSummaryItem {
+  resourceType: string;
+  label: string;
+  requestCount: number;
+  transferSize: number;
+}
+
+export interface ThirdPartyEntity {
+  name: string;
+  homepage?: string;
+  category?: string;
+  isFirstParty: boolean;
+  origins: string[];
+}
+
 export interface ParsedResult {
   url: string;
   fetchTime: string;
+  lighthouseVersion: string;
   strategy: string;
+  runWarnings: string[];
   scores: Record<string, CategoryScore>;
   metrics: Record<string, MetricValue>;
   summary: Summary;
   passed: PassedAudit[];
   byCategory: Record<string, CategoryGroup>;
+  networkRequests: NetworkRequest[];
+  resourceSummary: ResourceSummaryItem[];
+  entities: ThirdPartyEntity[];
   screenshots: Screenshots;
+}
+
+function resolveStr(val: unknown): string {
+  if (typeof val === 'string') return val;
+  if (val && typeof val === 'object') {
+    const obj = val as Record<string, unknown>;
+    if (typeof obj.value === 'string') return obj.value;
+  }
+  return '';
+}
+
+function resolveNum(val: unknown): number {
+  if (typeof val === 'number') return val;
+  if (typeof val === 'string') return parseFloat(val) || 0;
+  if (val && typeof val === 'object') {
+    const obj = val as Record<string, unknown>;
+    if (typeof obj.value === 'number') return obj.value;
+  }
+  return 0;
 }
 
 const METRIC_IDS = new Set([
@@ -186,6 +238,36 @@ export function parseResults(result: RunnerResult, strategy: string): ParsedResu
     };
   }
 
+  const networkAuditItems = ((lhr.audits['network-requests']?.details as { items?: Record<string, unknown>[] } | undefined)?.items ?? []);
+  const networkRequests: NetworkRequest[] = networkAuditItems.map(item => ({
+    url: resolveStr(item.url),
+    protocol: resolveStr(item.protocol),
+    resourceType: resolveStr(item.resourceType),
+    mimeType: resolveStr(item.mimeType),
+    statusCode: resolveNum(item.statusCode),
+    transferSize: resolveNum(item.transferSize),
+    resourceSize: resolveNum(item.resourceSize),
+    startTime: resolveNum(item.networkRequestTime),
+    endTime: resolveNum(item.networkEndTime),
+    ...(item.entity != null ? { entity: resolveStr(item.entity) } : {}),
+  }));
+
+  const resourceAuditItems = ((lhr.audits['resource-summary']?.details as { items?: Record<string, unknown>[] } | undefined)?.items ?? []);
+  const resourceSummary: ResourceSummaryItem[] = resourceAuditItems.map(item => ({
+    resourceType: resolveStr(item.resourceType ?? item.label),
+    label: resolveStr(item.label),
+    requestCount: resolveNum(item.requestCount),
+    transferSize: resolveNum(item.transferSize),
+  }));
+
+  const entities: ThirdPartyEntity[] = (lhr.entities ?? []).map(e => ({
+    name: e.name,
+    ...(e.homepage ? { homepage: e.homepage } : {}),
+    ...(e.category ? { category: e.category } : {}),
+    isFirstParty: e.isFirstParty ?? false,
+    origins: e.origins,
+  }));
+
   const finalScreenshot = lhr.audits['final-screenshot'];
   const filmstripAudit = lhr.audits['screenshot-thumbnails'];
   const fullPage = lhr.fullPageScreenshot;
@@ -200,7 +282,9 @@ export function parseResults(result: RunnerResult, strategy: string): ParsedResu
   return {
     url: lhr.finalDisplayedUrl,
     fetchTime: lhr.fetchTime,
+    lighthouseVersion: lhr.lighthouseVersion,
     strategy,
+    runWarnings: lhr.runWarnings,
     scores,
     metrics,
     summary: {
@@ -211,6 +295,9 @@ export function parseResults(result: RunnerResult, strategy: string): ParsedResu
     },
     passed,
     byCategory,
+    networkRequests,
+    resourceSummary,
+    entities,
     screenshots,
   };
 }
