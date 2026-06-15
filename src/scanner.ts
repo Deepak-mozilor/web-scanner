@@ -1,4 +1,4 @@
-import * as chromeLauncher from 'chrome-launcher';
+import puppeteer from 'puppeteer';
 import type { RunnerResult } from 'lighthouse';
 
 export type Strategy = 'mobile' | 'desktop';
@@ -30,13 +30,15 @@ export async function runScan(options: ScanOptions): Promise<RunnerResult> {
   const { default: lighthouse } = await import('lighthouse');
 
   console.log(`[scanner] launching Chrome`);
-  const chrome = await chromeLauncher.launch({
-    chromeFlags: ['--headless', '--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage'],
+  const browser = await puppeteer.launch({
+    headless: true,
+    args: ['--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage'],
   });
-  console.log(`[scanner] Chrome ready on port ${chrome.port}`);
+  const port = new URL(browser.wsEndpoint()).port;
+  console.log(`[scanner] Chrome ready on port ${port}`);
 
   const flags = {
-    port: chrome.port,
+    port: Number(port),
     output: 'json' as const,
     logLevel: 'error' as const,
     onlyCategories: categories,
@@ -55,7 +57,7 @@ export async function runScan(options: ScanOptions): Promise<RunnerResult> {
     console.log(`[scanner] Lighthouse finished`);
     return result;
   } finally {
-    await chrome.kill();
-    console.log(`[scanner] Chrome killed`);
+    await browser.close();
+    console.log(`[scanner] Chrome closed`);
   }
 }
