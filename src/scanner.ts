@@ -3,6 +3,40 @@ import type { RunnerResult } from 'lighthouse';
 
 export type Strategy = 'mobile' | 'desktop';
 
+export class ScanError extends Error {
+  constructor(
+    message: string,
+    public readonly code: string,
+    public readonly statusCode: number = 500,
+  ) {
+    super(message);
+    this.name = 'ScanError';
+  }
+}
+
+// Lighthouse error codes that mean the URL itself is bad (caller error → 4xx)
+const CLIENT_ERROR_CODES = new Set([
+  'DNS_FAILURE',
+  'FAILED_DOCUMENT_REQUEST',
+  'ERRORED_DOCUMENT_REQUEST',
+  'INSECURE_DOCUMENT_REQUEST',
+  'NOT_HTML',
+  'NO_FCP',
+  'PAGE_HUNG',
+  'PROTOCOL_TIMEOUT',
+]);
+
+const LH_ERROR_MESSAGES: Record<string, string> = {
+  DNS_FAILURE: 'URL could not be reached: DNS lookup failed',
+  FAILED_DOCUMENT_REQUEST: 'URL could not be loaded',
+  ERRORED_DOCUMENT_REQUEST: 'URL returned an error response',
+  INSECURE_DOCUMENT_REQUEST: 'URL has an SSL/TLS error',
+  NOT_HTML: 'URL did not return an HTML page',
+  NO_FCP: 'Page loaded but never rendered any content',
+  PAGE_HUNG: 'Page became unresponsive',
+  PROTOCOL_TIMEOUT: 'Browser timed out communicating with the page',
+};
+
 export interface ScanOptions {
   url: string;
   strategy?: Strategy;
@@ -57,9 +91,22 @@ export async function runScan(options: ScanOptions): Promise<RunnerResult> {
   try {
     console.log(`[scanner] running Lighthouse on ${url}`);
     const result = await Promise.race([lighthouse(url, flags), timeoutPromise]);
-    if (!result) throw new Error('Lighthouse returned no result');
+    if (!result) throw new ScanError('Lighthouse returned no result', 'NO_RESULT', 500);
     console.log(`[scanner] Lighthouse finished`);
     return result;
+  } catch (err) {
+    if (err instanceof ScanError) throw err;
+
+    const message = err instanceof Error ? err.message : String(err);
+    const lhCode = (err as { code?: string }).code;
+
+    if (message.includes('timed out')) {
+      throw new ScanError(`Scan timed out after ${timeout}ms`, 'TIMEOUT', 504);
+    }
+    if (lhCode && CLIENT_ERROR_CODES.has(lhCode)) {
+      throw new ScanError(LH_ERROR_MESSAGES[lhCode] ?? 'URL could not be loaded', lhCode, 400);
+    }
+    throw err;
   } finally {
     await browser.close();
     console.log(`[scanner] Chrome closed`);

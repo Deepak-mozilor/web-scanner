@@ -1,6 +1,6 @@
 import express, { Request, Response, NextFunction } from 'express';
 import rateLimit from 'express-rate-limit';
-import { runScan, Strategy } from './scanner';
+import { runScan, ScanError, Strategy } from './scanner';
 import { parseResults } from './parser';
 
 const app = express();
@@ -87,6 +87,10 @@ app.post('/scan', async (req: Request<object, object, ScanBody>, res: Response) 
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error';
     console.error(`[scan] error  url=${url} elapsed=${Date.now() - t0}ms error=${message}`);
+    if (err instanceof ScanError) {
+      res.status(err.statusCode).json({ success: false, error: err.message, code: err.code });
+      return;
+    }
     res.status(500).json({ success: false, error: 'Scan failed' });
   }
 });
