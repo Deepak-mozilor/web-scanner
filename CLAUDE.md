@@ -20,7 +20,7 @@ This is a single Express API that wraps [Lighthouse](https://github.com/GoogleCh
 
 **Request flow:**
 1. `POST /scan` in `src/server.ts` validates the request body and calls `runScan()`
-2. `src/scanner.ts` launches Chrome via `chrome-launcher`, runs Lighthouse, then kills Chrome
+2. `src/scanner.ts` launches Chrome via Puppeteer (bundled Chromium), runs Lighthouse, then closes the browser
 3. `src/parser.ts` transforms the raw `RunnerResult` into a structured `ParsedResult`
 4. `src/server.ts` returns the parsed result as JSON
 

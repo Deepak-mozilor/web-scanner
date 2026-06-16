@@ -31,8 +31,12 @@ export async function runScan(options: ScanOptions): Promise<RunnerResult> {
 
   console.log(`[scanner] launching Chrome`);
   const browser = await puppeteer.launch({
-    headless: true,
-    args: ['--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage'],
+    headless: 'shell',
+    args: [
+      '--no-sandbox',
+      '--disable-dev-shm-usage',
+      '--enable-features=NetworkService,NetworkServiceInProcess',
+    ],
   });
   const port = new URL(browser.wsEndpoint()).port;
   console.log(`[scanner] Chrome ready on port ${port}`);
