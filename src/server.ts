@@ -1,21 +1,25 @@
 import express, { Request, Response, NextFunction } from 'express';
 import rateLimit from 'express-rate-limit';
-import { runScan, ScanError, Strategy } from './scanner';
-import { parseResults } from './parser';
+import { Strategy } from './scanner';
+import { scanQueue, ScanJobData } from './queue';
 
 const app = express();
 app.use(express.json());
 
-app.use(
-  '/scan',
-  rateLimit({
-    windowMs: 60_000,
-    max: 10,
-    standardHeaders: true,
-    legacyHeaders: false,
-    message: { error: 'Too many scan requests, please try again later' },
-  })
-);
+if (process.env.LOAD_TEST_MODE !== 'true') {
+  app.use(
+    '/scan',
+    rateLimit({
+      windowMs: 60_000,
+      max: 3,
+      standardHeaders: true,
+      legacyHeaders: false,
+      message: { error: 'Too many scan requests, please try again later' },
+    })
+  );
+} else {
+  console.warn('[server] LOAD_TEST_MODE=true — rate limiter disabled');
+}
 
 app.get('/health', (_req: Request, res: Response) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
@@ -40,21 +44,57 @@ function isSsrfUrl(raw: string): boolean {
 
 interface ScanBody {
   url: string;
+  scan_job_id: string;
+  callback_url: string;
   strategy?: Strategy;
   categories?: string[];
   timeout?: number;
+  crawl_limit?: number;
 }
 
 app.post('/scan', async (req: Request<object, object, ScanBody>, res: Response) => {
-  const { url, strategy = 'desktop', categories, timeout } = req.body;
+  const {
+    url,
+    scan_job_id,
+    callback_url,
+    strategy = 'desktop',
+    categories = ['performance', 'accessibility', 'best-practices', 'seo'],
+    timeout = 60_000,
+    crawl_limit = 5,
+  } = req.body;
 
-  if (!url) {
-    res.status(400).json({ error: 'url is required' });
+  if (!url || typeof url !== 'string' || isSsrfUrl(url)) {
+    res.status(400).json({ error: 'url is required and must be a valid http/https URL' });
     return;
   }
 
-  if (isSsrfUrl(url)) {
-    res.status(400).json({ error: 'invalid url' });
+  if (typeof crawl_limit !== 'number' || crawl_limit < 1 || crawl_limit > 20) {
+    res.status(400).json({ error: 'crawl_limit must be a number between 1 and 20' });
+    return;
+  }
+
+  if (!scan_job_id || typeof scan_job_id !== 'string') {
+    res.status(400).json({ error: 'scan_job_id is required and must be a string' });
+    return;
+  }
+
+  if (!callback_url) {
+    res.status(400).json({ error: 'callback_url is required' });
+    return;
+  }
+  let parsedCallback: URL;
+  try {
+    parsedCallback = new URL(callback_url);
+  } catch {
+    res.status(400).json({ error: 'invalid callback_url' });
+    return;
+  }
+  if (!['http:', 'https:'].includes(parsedCallback.protocol)) {
+    res.status(400).json({ error: 'callback_url must use http or https' });
+    return;
+  }
+  if (process.env.STRICT_CALLBACK_SSRF === 'true' && isSsrfUrl(callback_url)) {
+    res.status(400).json({ error: 'invalid callback_url' });
     return;
   }
 
@@ -63,36 +103,28 @@ app.post('/scan', async (req: Request<object, object, ScanBody>, res: Response) 
     return;
   }
 
-  if (categories !== undefined) {
-    if (!Array.isArray(categories) || categories.some(c => !ALLOWED_CATEGORIES.has(c))) {
-      res.status(400).json({ error: `categories must be an array of: ${[...ALLOWED_CATEGORIES].join(', ')}` });
-      return;
-    }
+  if (!Array.isArray(categories) || categories.some(c => !ALLOWED_CATEGORIES.has(c))) {
+    res.status(400).json({ error: `categories must be an array of: ${[...ALLOWED_CATEGORIES].join(', ')}` });
+    return;
   }
 
-  if (timeout !== undefined) {
-    if (typeof timeout !== 'number' || timeout < 5_000 || timeout > 120_000) {
-      res.status(400).json({ error: 'timeout must be a number between 5000 and 120000' });
-      return;
-    }
+  if (typeof timeout !== 'number' || timeout < 5_000 || timeout > 300_000) {
+    res.status(400).json({ error: 'timeout must be a number between 5000 and 300000' });
+    return;
   }
 
-  console.log(`[scan] start  url=${url} strategy=${strategy}`);
-  const t0 = Date.now();
+  const jobData: ScanJobData = { url, scan_job_id, callback_url, strategy, categories, timeout, crawl_limit };
+
   try {
-    const raw = await runScan({ url, strategy, categories, timeout });
-    const data = parseResults(raw, strategy);
-    console.log(`[scan] done   url=${url} elapsed=${Date.now() - t0}ms`);
-    res.json({ success: true, data });
+    await scanQueue.add('scan', jobData, { jobId: scan_job_id });
   } catch (err) {
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    console.error(`[scan] error  url=${url} elapsed=${Date.now() - t0}ms error=${message}`);
-    if (err instanceof ScanError) {
-      res.status(err.statusCode).json({ success: false, error: err.message, code: err.code });
-      return;
-    }
-    res.status(500).json({ success: false, error: 'Scan failed' });
+    console.error(`[job:${scan_job_id}] failed to enqueue:`, err);
+    res.status(503).json({ error: 'Queue temporarily unavailable, please retry' });
+    return;
   }
+
+  console.log(`[job:${scan_job_id}] enqueued url=${url} strategy=${strategy}`);
+  res.status(202).json({ scan_job_id, message: 'Scan queued — crawling will discover pages', root_url: url });
 });
 
 // eslint-disable-next-line @typescript-eslint/no-unused-vars

@@ -52,6 +52,12 @@ const DESKTOP_SCREEN = {
   disabled: false,
 };
 
+export const PUPPETEER_ARGS = [
+  '--no-sandbox',
+  '--disable-dev-shm-usage',
+  '--enable-features=NetworkService,NetworkServiceInProcess',
+];
+
 export async function runScan(options: ScanOptions): Promise<RunnerResult> {
   const {
     url,
@@ -66,11 +72,7 @@ export async function runScan(options: ScanOptions): Promise<RunnerResult> {
   console.log(`[scanner] launching Chrome`);
   const browser = await puppeteer.launch({
     headless: 'shell',
-    args: [
-      '--no-sandbox',
-      '--disable-dev-shm-usage',
-      '--enable-features=NetworkService,NetworkServiceInProcess',
-    ],
+    args: PUPPETEER_ARGS,
   });
   const port = new URL(browser.wsEndpoint()).port;
   console.log(`[scanner] Chrome ready on port ${port}`);
