@@ -58,6 +58,12 @@ export const PUPPETEER_ARGS = [
   '--enable-features=NetworkService,NetworkServiceInProcess',
 ];
 
+// Lighthouse uses the global performance namespace (performance.mark / clearMarks).
+// Running two Lighthouse instances concurrently in the same Node process causes
+// "performance mark has not been set" errors. This mutex ensures only one scan
+// runs at a time across all jobs.
+let lighthouseQueue: Promise<void> = Promise.resolve();
+
 export async function runScan(options: ScanOptions): Promise<RunnerResult> {
   const {
     url,
@@ -65,6 +71,12 @@ export async function runScan(options: ScanOptions): Promise<RunnerResult> {
     categories = ['performance', 'accessibility', 'best-practices', 'seo'],
     timeout = 60_000,
   } = options;
+
+  // Wait for any in-flight Lighthouse scan to finish before starting this one
+  let release!: () => void;
+  const previous = lighthouseQueue;
+  lighthouseQueue = new Promise<void>(resolve => (release = resolve));
+  await previous;
 
   // Dynamic import because lighthouse 10+ is ESM-only
   const { default: lighthouse } = await import('lighthouse');
@@ -112,5 +124,6 @@ export async function runScan(options: ScanOptions): Promise<RunnerResult> {
   } finally {
     await browser.close();
     console.log(`[scanner] Chrome closed`);
+    release();
   }
 }

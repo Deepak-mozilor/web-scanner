@@ -2,4 +2,7 @@ node_modules/
 dist/
 *.js.map
 .DS_Store
-apple-scan.json
+.env
+scan-results/
+*.scan.json
+scripts/

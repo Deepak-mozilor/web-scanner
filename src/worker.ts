@@ -1,8 +1,6 @@
 import { Worker, Job, UnrecoverableError } from 'bullmq';
 import { runScan, ScanError } from './scanner';
 import { parseResults } from './parser';
-import { runWithConcurrency } from './utils';
-import { crawlUrls } from './crawler';
 import { createRedisConnection, ScanJobData, QUEUE_NAME } from './queue';
 
 async function postCallback(callbackUrl: string, body: unknown): Promise<void> {
@@ -20,46 +18,27 @@ async function postCallback(callbackUrl: string, body: unknown): Promise<void> {
 }
 
 async function processJob(job: Job<ScanJobData>): Promise<void> {
-  const { url, scan_job_id, callback_url, strategy, categories, timeout, crawl_limit } = job.data;
+  const { url, scan_job_id, callback_url, strategy, categories, timeout } = job.data;
 
   if (!url || !scan_job_id || !callback_url) {
     throw new UnrecoverableError(`[job:${scan_job_id}] malformed payload`);
   }
 
-  console.log(`[job:${scan_job_id}] attempt=${job.attemptsMade + 1} crawling ${url}`);
+  console.log(`[job:${scan_job_id}] attempt=${job.attemptsMade + 1} scanning ${url}`);
 
-  const urls = await crawlUrls(url, crawl_limit ?? 5);
-  console.log(`[job:${scan_job_id}] discovered ${urls.length} url(s)`);
+  try {
+    const raw = await runScan({ url, strategy, categories, timeout });
+    const data = parseResults(raw, strategy);
+    await postCallback(callback_url, { scan_job_id, url, success: true, data });
+  } catch (err) {
+    console.error(`[job:${scan_job_id}] scan failed for ${url}:`, err);
+    const detail = err instanceof ScanError
+      ? { error: err.message, code: err.code }
+      : { error: (err as Error).message ?? 'Scan failed', code: 'CHROME_ERROR' };
+    await postCallback(callback_url, { scan_job_id, url, success: false, ...detail });
+  }
 
-  let succeeded = 0;
-  let failed = 0;
-
-  await runWithConcurrency(urls, 1, async (pageUrl) => {
-    try {
-      const raw = await runScan({ url: pageUrl, strategy, categories, timeout });
-      const data = parseResults(raw, strategy);
-      succeeded++;
-      await postCallback(callback_url, { scan_job_id, url: pageUrl, success: true, data });
-    } catch (err) {
-      failed++;
-      console.error(`[job:${scan_job_id}] scan failed for ${pageUrl}:`, err);
-      const detail = err instanceof ScanError
-        ? { error: err.message, code: err.code }
-        : { error: (err as Error).message ?? 'Scan failed', code: 'CHROME_ERROR' };
-      await postCallback(callback_url, { scan_job_id, url: pageUrl, success: false, ...detail });
-    }
-  });
-
-  await postCallback(callback_url, {
-    scan_job_id,
-    event: 'complete',
-    root_url: url,
-    total_urls: urls.length,
-    succeeded,
-    failed,
-  });
-
-  console.log(`[job:${scan_job_id}] done succeeded=${succeeded} failed=${failed}`);
+  console.log(`[job:${scan_job_id}] done`);
 }
 
 export function startWorker(): Worker<ScanJobData> {

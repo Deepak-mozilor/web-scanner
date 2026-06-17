@@ -8,7 +8,6 @@ export interface ScanJobData {
   strategy: Strategy;
   categories: string[];
   timeout: number;
-  crawl_limit: number;
 }
 
 export const QUEUE_NAME = 'scan';

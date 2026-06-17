@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import { startWorker } from './src/worker';
 
 const worker = startWorker();

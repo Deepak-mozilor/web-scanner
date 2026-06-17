@@ -49,10 +49,15 @@ interface ScanBody {
   strategy?: Strategy;
   categories?: string[];
   timeout?: number;
-  crawl_limit?: number;
 }
 
 app.post('/scan', async (req: Request<object, object, ScanBody>, res: Response) => {
+  const secret = process.env.SCANNER_SECRET;
+  if (secret && req.headers['x-scanner-secret'] !== secret) {
+    res.status(401).json({ error: 'Unauthorized' });
+    return;
+  }
+
   const {
     url,
     scan_job_id,
@@ -60,16 +65,10 @@ app.post('/scan', async (req: Request<object, object, ScanBody>, res: Response) 
     strategy = 'desktop',
     categories = ['performance', 'accessibility', 'best-practices', 'seo'],
     timeout = 60_000,
-    crawl_limit = 5,
   } = req.body;
 
   if (!url || typeof url !== 'string' || isSsrfUrl(url)) {
     res.status(400).json({ error: 'url is required and must be a valid http/https URL' });
-    return;
-  }
-
-  if (typeof crawl_limit !== 'number' || crawl_limit < 1 || crawl_limit > 20) {
-    res.status(400).json({ error: 'crawl_limit must be a number between 1 and 20' });
     return;
   }
 
@@ -113,7 +112,7 @@ app.post('/scan', async (req: Request<object, object, ScanBody>, res: Response) 
     return;
   }
 
-  const jobData: ScanJobData = { url, scan_job_id, callback_url, strategy, categories, timeout, crawl_limit };
+  const jobData: ScanJobData = { url, scan_job_id, callback_url, strategy, categories, timeout };
 
   try {
     await scanQueue.add('scan', jobData, { jobId: scan_job_id });
@@ -124,7 +123,7 @@ app.post('/scan', async (req: Request<object, object, ScanBody>, res: Response) 
   }
 
   console.log(`[job:${scan_job_id}] enqueued url=${url} strategy=${strategy}`);
-  res.status(202).json({ scan_job_id, message: 'Scan queued — crawling will discover pages', root_url: url });
+  res.status(202).json({ scan_job_id, message: 'Scan queued', url });
 });
 
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
