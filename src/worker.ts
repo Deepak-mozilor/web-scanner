@@ -42,15 +42,11 @@ async function processJob(job: Job<ScanJobData>): Promise<void> {
 }
 
 export function startWorker(): Worker<ScanJobData> {
-  const concurrency = process.env.WORKER_CONCURRENCY
-    ? parseInt(process.env.WORKER_CONCURRENCY, 10)
-    : 5;
-
-  console.log(`[worker] starting concurrency=${concurrency}`);
+  console.log(`[worker] starting`);
 
   const worker = new Worker<ScanJobData>(QUEUE_NAME, processJob, {
     connection: createRedisConnection(),
-    concurrency,
+    concurrency: 5,
     lockDuration: 300_000,
     lockRenewTime: 100_000,
   });
