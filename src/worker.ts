@@ -4,10 +4,12 @@ import { parseResults } from './parser';
 import { createRedisConnection, ScanJobData, QUEUE_NAME } from './queue';
 
 async function postCallback(callbackUrl: string, body: unknown): Promise<void> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (process.env.SCANNER_SECRET) headers['X-Scanner-Secret'] = process.env.SCANNER_SECRET;
   try {
     const res = await fetch(callbackUrl, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify(body),
       signal: AbortSignal.timeout(10_000),
     });

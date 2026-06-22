@@ -27,6 +27,23 @@ export interface AuditItem {
   items?: Record<string, unknown>[];
 }
 
+export interface ChecklistItem {
+  label: string;
+  passed: boolean;
+}
+
+export interface InsightItem {
+  id: string;
+  title: string;
+  description: string;
+  learnMoreUrl?: string;
+  displayValue: string;
+  score: number | null;
+  guidanceLevel: number;
+  metricSavings?: Record<string, number>;
+  checklist: Record<string, ChecklistItem>;
+}
+
 export interface PassedAudit {
   id: string;
   title: string;
@@ -64,6 +81,7 @@ export interface ParsedResult {
   strategy: string;
   scores: Record<string, CategoryScore>;
   metrics: Record<string, MetricValue>;
+  insights: InsightItem[];
   summary: Summary;
   passed: PassedAudit[];
   byCategory: Record<string, CategoryGroup>;
@@ -93,13 +111,35 @@ function pct(score: number | null | undefined): number | null {
   return score != null ? Math.round(score * 100) : null;
 }
 
-function toAuditItem(a: { id: string; title: string; description: string; displayValue?: string; score: number | null; details?: unknown }): AuditItem {
+function toInsightItem(a: {
+  id: string;
+  title: string;
+  description: string;
+  displayValue?: string;
+  score: number | null;
+  guidanceLevel?: number;
+  metricSavings?: Record<string, number | undefined>;
+  details?: unknown;
+}): InsightItem {
   const details = a.details as {
     type?: string;
-    items?: Record<string, unknown>[];
-    overallSavingsBytes?: number;
-    overallSavingsMs?: number;
+    items?: Record<string, { value: boolean; label: string }>;
   } | undefined;
+
+  const checklist: Record<string, ChecklistItem> = {};
+  if (details?.type === 'checklist' && details.items) {
+    for (const [key, item] of Object.entries(details.items)) {
+      checklist[key] = { label: String(item.label), passed: item.value };
+    }
+  }
+
+  const metricSavings: Record<string, number> = {};
+  if (a.metricSavings) {
+    for (const [key, val] of Object.entries(a.metricSavings)) {
+      if (val != null) metricSavings[key] = val;
+    }
+  }
+
   const learnMoreUrl = extractLearnMoreUrl(a.description);
   return {
     id: a.id,
@@ -108,11 +148,45 @@ function toAuditItem(a: { id: string; title: string; description: string; displa
     learnMoreUrl,
     displayValue: a.displayValue ?? '',
     score: pct(a.score),
+    guidanceLevel: a.guidanceLevel ?? 1,
+    ...(Object.keys(metricSavings).length > 0 && { metricSavings }),
+    checklist,
+  };
+}
+
+function toAuditItem(a: { id: string; title: string; description: string; displayValue?: string; score: number | null; details?: unknown }): AuditItem {
+  const details = a.details as {
+    type?: string;
+    items?: Record<string, unknown>[] | Record<string, unknown>;
+    overallSavingsBytes?: number;
+    overallSavingsMs?: number;
+  } | undefined;
+  const learnMoreUrl = extractLearnMoreUrl(a.description);
+
+  let items: Record<string, unknown>[] | undefined;
+  if (Array.isArray(details?.items) && (details.items as Record<string, unknown>[]).length > 0) {
+    items = details.items as Record<string, unknown>[];
+  } else if (
+    details?.type === 'checklist' &&
+    details.items != null &&
+    !Array.isArray(details.items) &&
+    typeof details.items === 'object'
+  ) {
+    items = [{ type: 'checklist', items: details.items }];
+  }
+
+  return {
+    id: a.id,
+    title: a.title,
+    description: stripLearnMoreLink(a.description),
+    learnMoreUrl,
+    displayValue: a.displayValue ?? '',
+    score: pct(a.score),
     detailsType: details?.type ?? 'n/a',
-    itemCount: Array.isArray(details?.items) ? details.items.length : undefined,
+    itemCount: items?.length,
     wastedBytes: details?.overallSavingsBytes,
     wastedMs: details?.overallSavingsMs,
-    items: Array.isArray(details?.items) && details.items.length > 0 ? details.items : undefined,
+    items,
   };
 }
 
@@ -140,6 +214,10 @@ export function parseResults(result: RunnerResult, strategy: string): ParsedResu
       };
     }
   }
+
+  const insights: InsightItem[] = Object.values(lhr.audits)
+    .filter((a) => a.guidanceLevel != null && (a.details as { type?: string } | undefined)?.type === 'checklist')
+    .map(toInsightItem);
 
   const scoreable = Object.values(lhr.audits).filter(
     (a) =>
@@ -203,6 +281,7 @@ export function parseResults(result: RunnerResult, strategy: string): ParsedResu
     strategy,
     scores,
     metrics,
+    insights,
     summary: {
       total: critical.length + nonCritical.length + passed.length,
       passed: passed.length,
