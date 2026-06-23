@@ -2,6 +2,7 @@ import express, { Request, Response, NextFunction } from 'express';
 import rateLimit from 'express-rate-limit';
 import { Strategy } from './scanner';
 import { scanQueue, CrawlJobData } from './queue';
+import { postCallback } from './callback';
 
 const app = express();
 app.use(express.json());
@@ -168,11 +169,34 @@ app.post('/scan/:scan_job_id/cancel', async (req: Request, res: Response) => {
       }
     }
 
-    // 3. Drop the completion counter so no stray 'complete' callback fires.
-    await redis.del(`completion:${scanJobId}`);
+    // 3. Snapshot partial completion counts and callback URL before cleaning up.
+    const [callbackUrl, succeededStr, failedStr] = await Promise.all([
+      redis.get(`meta:${scanJobId}:callback_url`),
+      redis.hget(`completion:${scanJobId}`, 'succeeded'),
+      redis.hget(`completion:${scanJobId}`, 'failed'),
+    ]);
+    const succeeded = parseInt(succeededStr ?? '0', 10);
+    const failed = parseInt(failedStr ?? '0', 10);
+
+    // 4. Drop the completion counter so no stray 'complete' callback fires.
+    await Promise.all([
+      redis.del(`completion:${scanJobId}`),
+      redis.del(`meta:${scanJobId}:callback_url`),
+    ]);
 
     console.log(`[job:${scanJobId}] cancelled — removed ${removed} pending job(s); active scans will stop`);
     res.status(200).json({ scan_job_id: scanJobId, cancelled: true, removed_pending: removed });
+
+    // 5. Fire cancelled callback after responding (non-blocking for the caller).
+    if (callbackUrl) {
+      await postCallback(callbackUrl, {
+        event: 'cancelled',
+        scan_job_id: scanJobId,
+        succeeded,
+        failed,
+        removed_pending: removed,
+      });
+    }
   } catch (err) {
     console.error(`[job:${scanJobId}] cancel failed:`, err);
     res.status(503).json({ error: 'Cancel failed, please retry' });

@@ -2,6 +2,7 @@ import { Worker, Job, UnrecoverableError } from 'bullmq';
 import { runScan, ScanError } from './scanner';
 import { parseResults } from './parser';
 import { crawlUrls } from './crawler';
+import { postCallback } from './callback';
 import { createRedisConnection, scanQueue, CrawlJobData, ScanJobData, AnyJobData, QUEUE_NAME } from './queue';
 
 async function isCancelled(scanJobId: string): Promise<boolean> {
@@ -10,26 +11,6 @@ async function isCancelled(scanJobId: string): Promise<boolean> {
   return (await redis.exists(`cancelled:${scanJobId}`)) === 1;
 }
 
-async function postCallback(callbackUrl: string, body: unknown): Promise<void> {
-  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-  if (process.env.SCANNER_SECRET) headers['X-Scanner-Secret'] = process.env.SCANNER_SECRET;
-  try {
-    const res = await fetch(callbackUrl, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(10_000),
-    });
-    if (res.ok) {
-      console.log(`[callback] POST ${callbackUrl} → ${res.status}`);
-    } else {
-      const text = await res.text().catch(() => '');
-      console.warn(`[callback] POST ${callbackUrl} → ${res.status}`, text);
-    }
-  } catch (err) {
-    console.error(`[callback] POST ${callbackUrl} failed: ${(err as Error).message}`);
-  }
-}
 
 async function processCrawlJob(job: Job<CrawlJobData>): Promise<void> {
   const { url, scan_job_id, callback_url, strategy, categories, timeout, crawl_limit } = job.data;
@@ -57,11 +38,12 @@ async function processCrawlJob(job: Job<CrawlJobData>): Promise<void> {
     return;
   }
 
-  // Initialise Redis completion counter
+  // Initialise Redis completion counter + store callback_url for the cancel endpoint
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const redis: any = await (scanQueue as any).client;
   await redis.hset(`completion:${scan_job_id}`, 'total', String(urls.length), 'done', '0', 'succeeded', '0', 'failed', '0');
   await redis.expire(`completion:${scan_job_id}`, 86400);
+  await redis.set(`meta:${scan_job_id}:callback_url`, callback_url, 'EX', 86400);
 
   // Enqueue one scan job per discovered URL
   for (let i = 0; i < urls.length; i++) {
