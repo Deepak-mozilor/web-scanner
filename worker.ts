@@ -17,3 +17,5 @@ async function shutdown(signal: string): Promise<void> {
 
 process.on('SIGTERM', () => shutdown('SIGTERM'));
 process.on('SIGINT',  () => shutdown('SIGINT'));
+process.on('uncaughtException', (err) => console.error('[worker] uncaughtException:', err));
+process.on('unhandledRejection', (reason) => console.error('[worker] unhandledRejection:', reason));

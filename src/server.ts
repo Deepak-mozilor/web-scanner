@@ -1,24 +1,36 @@
 import express, { Request, Response, NextFunction } from 'express';
 import rateLimit from 'express-rate-limit';
 import { Strategy } from './scanner';
-import { scanQueue, ScanJobData } from './queue';
+import { scanQueue, CrawlJobData } from './queue';
 
 const app = express();
 app.use(express.json());
 
-if (process.env.LOAD_TEST_MODE !== 'true') {
-  app.use(
-    '/scan',
-    rateLimit({
-      windowMs: 60_000,
-      max: 3,
-      standardHeaders: true,
-      legacyHeaders: false,
-      message: { error: 'Too many scan requests, please try again later' },
-    })
-  );
-} else {
+// Rate limiter applied only to scan creation, not to cancel (cancels must always get through).
+const noopLimiter: express.RequestHandler = (_req, _res, next) => next();
+const scanLimiter: express.RequestHandler =
+  process.env.LOAD_TEST_MODE === 'true'
+    ? noopLimiter
+    : rateLimit({
+        windowMs: 60_000,
+        max: 3,
+        standardHeaders: true,
+        legacyHeaders: false,
+        message: { error: 'Too many scan requests, please try again later' },
+      });
+
+if (process.env.LOAD_TEST_MODE === 'true') {
   console.warn('[server] LOAD_TEST_MODE=true — rate limiter disabled');
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function requireScannerSecret(req: Request<any, any, any>, res: Response): boolean {
+  const secret = process.env.SCANNER_SECRET;
+  if (secret && req.headers['x-scanner-secret'] !== secret) {
+    res.status(401).json({ error: 'Unauthorized' });
+    return false;
+  }
+  return true;
 }
 
 app.get('/health', (_req: Request, res: Response) => {
@@ -49,14 +61,11 @@ interface ScanBody {
   strategy?: Strategy;
   categories?: string[];
   timeout?: number;
+  crawl_limit?: number;
 }
 
-app.post('/scan', async (req: Request<object, object, ScanBody>, res: Response) => {
-  const secret = process.env.SCANNER_SECRET;
-  if (secret && req.headers['x-scanner-secret'] !== secret) {
-    res.status(401).json({ error: 'Unauthorized' });
-    return;
-  }
+app.post('/scan', scanLimiter, async (req: Request<object, object, ScanBody>, res: Response) => {
+  if (!requireScannerSecret(req, res)) return;
 
   const {
     url,
@@ -65,6 +74,7 @@ app.post('/scan', async (req: Request<object, object, ScanBody>, res: Response) 
     strategy = 'desktop',
     categories = ['performance', 'accessibility', 'best-practices', 'seo'],
     timeout = 60_000,
+    crawl_limit = 5,
   } = req.body;
 
   if (!url || typeof url !== 'string' || isSsrfUrl(url)) {
@@ -112,18 +122,61 @@ app.post('/scan', async (req: Request<object, object, ScanBody>, res: Response) 
     return;
   }
 
-  const jobData: ScanJobData = { url, scan_job_id, callback_url, strategy, categories, timeout };
+  if (typeof crawl_limit !== 'number' || crawl_limit < 1 || crawl_limit > 20) {
+    res.status(400).json({ error: 'crawl_limit must be a number between 1 and 20' });
+    return;
+  }
+
+  const jobData: CrawlJobData = { url, scan_job_id, callback_url, strategy, categories, timeout, crawl_limit };
 
   try {
-    await scanQueue.add('scan', jobData, { jobId: scan_job_id });
+    await scanQueue.add('crawl', jobData, { jobId: scan_job_id });
   } catch (err) {
     console.error(`[job:${scan_job_id}] failed to enqueue:`, err);
     res.status(503).json({ error: 'Queue temporarily unavailable, please retry' });
     return;
   }
 
-  console.log(`[job:${scan_job_id}] enqueued url=${url} strategy=${strategy}`);
+  console.log(`[job:${scan_job_id}] enqueued url=${url} strategy=${strategy} crawl_limit=${crawl_limit}`);
   res.status(202).json({ scan_job_id, message: 'Scan queued', url });
+});
+
+// Cancel a scan: stop the crawl + all its page scans. The server keeps running.
+app.post('/scan/:scan_job_id/cancel', async (req: Request, res: Response) => {
+  if (!requireScannerSecret(req, res)) return;
+
+  const scanJobId = req.params.scan_job_id;
+  if (!scanJobId) {
+    res.status(400).json({ error: 'scan_job_id is required' });
+    return;
+  }
+
+  try {
+    // 1. Raise the cancel flag first so any job that starts mid-cancel sees it.
+    //    24h TTL so the flag self-cleans even if nothing ever reads it.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const redis: any = await (scanQueue as any).client;
+    await redis.set(`cancelled:${scanJobId}`, '1', 'EX', 86_400);
+
+    // 2. Remove every still-pending job (the crawl job + any queued page scans).
+    //    Active jobs can't be removed (locked) — the flag stops those instead.
+    const pending = await scanQueue.getJobs(['waiting', 'delayed', 'prioritized', 'paused', 'wait']);
+    let removed = 0;
+    for (const job of pending) {
+      if (job?.data?.scan_job_id === scanJobId) {
+        await job.remove().then(() => { removed++; }).catch(() => { /* became active; flag handles it */ });
+      }
+    }
+
+    // 3. Drop the completion counter so no stray 'complete' callback fires.
+    await redis.del(`completion:${scanJobId}`);
+
+    console.log(`[job:${scanJobId}] cancelled — removed ${removed} pending job(s); active scans will stop`);
+    res.status(200).json({ scan_job_id: scanJobId, cancelled: true, removed_pending: removed });
+  } catch (err) {
+    console.error(`[job:${scanJobId}] cancel failed:`, err);
+    res.status(503).json({ error: 'Cancel failed, please retry' });
+  }
 });
 
 // eslint-disable-next-line @typescript-eslint/no-unused-vars

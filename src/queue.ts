@@ -1,6 +1,16 @@
 import { Queue } from 'bullmq';
 import { Strategy } from './scanner';
 
+export interface CrawlJobData {
+  url: string;
+  scan_job_id: string;
+  callback_url: string;
+  strategy: Strategy;
+  categories: string[];
+  timeout: number;
+  crawl_limit: number;
+}
+
 export interface ScanJobData {
   url: string;
   scan_job_id: string;
@@ -8,7 +18,10 @@ export interface ScanJobData {
   strategy: Strategy;
   categories: string[];
   timeout: number;
+  total_pages: number;
 }
+
+export type AnyJobData = CrawlJobData | ScanJobData;
 
 export const QUEUE_NAME = 'scan';
 
@@ -25,7 +38,7 @@ export function createRedisConnection() {
   };
 }
 
-export const scanQueue = new Queue<ScanJobData, void, string>(QUEUE_NAME, {
+export const scanQueue = new Queue<AnyJobData, void, 'crawl' | 'scan'>(QUEUE_NAME, {
   connection: createRedisConnection(),
   defaultJobOptions: {
     attempts: 3,

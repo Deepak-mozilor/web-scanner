@@ -42,6 +42,9 @@ export interface ScanOptions {
   strategy?: Strategy;
   categories?: string[];
   timeout?: number;
+  // Checked after the Lighthouse mutex is acquired, just before Chrome launches.
+  // Lets a cancelled job bail out instead of starting a scan it will throw away.
+  shouldCancel?: () => boolean | Promise<boolean>;
 }
 
 const DESKTOP_SCREEN = {
@@ -70,6 +73,7 @@ export async function runScan(options: ScanOptions): Promise<RunnerResult> {
     strategy = 'desktop',
     categories = ['performance', 'accessibility', 'best-practices', 'seo'],
     timeout = 60_000,
+    shouldCancel,
   } = options;
 
   // Wait for any in-flight Lighthouse scan to finish before starting this one
@@ -78,52 +82,61 @@ export async function runScan(options: ScanOptions): Promise<RunnerResult> {
   lighthouseQueue = new Promise<void>(resolve => (release = resolve));
   await previous;
 
-  // Dynamic import because lighthouse 10+ is ESM-only
-  const { default: lighthouse } = await import('lighthouse');
-
-  console.log(`[scanner] launching Chrome`);
-  const browser = await puppeteer.launch({
-    headless: 'shell',
-    args: PUPPETEER_ARGS,
-  });
-  const port = new URL(browser.wsEndpoint()).port;
-  console.log(`[scanner] Chrome ready on port ${port}`);
-
-  const flags = {
-    port: Number(port),
-    output: 'json' as const,
-    logLevel: 'error' as const,
-    onlyCategories: categories,
-    formFactor: strategy,
-    ...(strategy === 'desktop' && { screenEmulation: DESKTOP_SCREEN }),
-  };
-
-  const timeoutPromise = new Promise<never>((_, reject) =>
-    setTimeout(() => reject(new Error(`Scan timed out after ${timeout}ms`)), timeout)
-  );
-
   try {
-    console.log(`[scanner] running Lighthouse on ${url}`);
-    const result = await Promise.race([lighthouse(url, flags), timeoutPromise]);
-    if (!result) throw new ScanError('Lighthouse returned no result', 'NO_RESULT', 500);
-    console.log(`[scanner] Lighthouse finished`);
-    return result;
-  } catch (err) {
-    if (err instanceof ScanError) throw err;
-
-    const message = err instanceof Error ? err.message : String(err);
-    const lhCode = (err as { code?: string }).code;
-
-    if (message.includes('timed out')) {
-      throw new ScanError(`Scan timed out after ${timeout}ms`, 'TIMEOUT', 504);
+    // The job may have been cancelled while parked behind the mutex. Bail before
+    // spending the cost of launching Chrome and running a scan we'd discard.
+    if (shouldCancel && (await shouldCancel())) {
+      throw new ScanError('Scan cancelled', 'CANCELLED', 499);
     }
-    if (lhCode && CLIENT_ERROR_CODES.has(lhCode)) {
-      throw new ScanError(LH_ERROR_MESSAGES[lhCode] ?? 'URL could not be loaded', lhCode, 400);
+
+    // Dynamic import because lighthouse 10+ is ESM-only
+    const { default: lighthouse } = await import('lighthouse');
+
+    console.log(`[scanner] launching Chrome`);
+    const browser = await puppeteer.launch({
+      headless: 'shell',
+      args: PUPPETEER_ARGS,
+    });
+    const port = new URL(browser.wsEndpoint()).port;
+    console.log(`[scanner] Chrome ready on port ${port}`);
+
+    const flags = {
+      port: Number(port),
+      output: 'json' as const,
+      logLevel: 'error' as const,
+      onlyCategories: categories,
+      formFactor: strategy,
+      ...(strategy === 'desktop' && { screenEmulation: DESKTOP_SCREEN }),
+    };
+
+    const timeoutPromise = new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error(`Scan timed out after ${timeout}ms`)), timeout)
+    );
+
+    try {
+      console.log(`[scanner] running Lighthouse on ${url}`);
+      const result = await Promise.race([lighthouse(url, flags), timeoutPromise]);
+      if (!result) throw new ScanError('Lighthouse returned no result', 'NO_RESULT', 500);
+      console.log(`[scanner] Lighthouse finished`);
+      return result;
+    } catch (err) {
+      if (err instanceof ScanError) throw err;
+
+      const message = err instanceof Error ? err.message : String(err);
+      const lhCode = (err as { code?: string }).code;
+
+      if (message.includes('timed out')) {
+        throw new ScanError(`Scan timed out after ${timeout}ms`, 'TIMEOUT', 504);
+      }
+      if (lhCode && CLIENT_ERROR_CODES.has(lhCode)) {
+        throw new ScanError(LH_ERROR_MESSAGES[lhCode] ?? 'URL could not be loaded', lhCode, 400);
+      }
+      throw err;
+    } finally {
+      await browser.close();
+      console.log(`[scanner] Chrome closed`);
     }
-    throw err;
   } finally {
-    await browser.close();
-    console.log(`[scanner] Chrome closed`);
     release();
   }
 }
