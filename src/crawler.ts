@@ -1,3 +1,6 @@
+import puppeteer from 'puppeteer';
+import { PUPPETEER_ARGS } from './scanner';
+
 const SKIP_EXTENSIONS = /\.(css|js|jsx|ts|tsx|png|jpg|jpeg|gif|svg|ico|webp|woff|woff2|ttf|eot|pdf|zip|mp4|mp3|mov|avi|json|xml|txt|csv|webmanifest|rss|atom|feed)$/i;
 const SKIP_PATH_PREFIXES = ['/api/', '/static/', '/_next/', '/assets/', '/wp-content/', '/wp-admin/', '/cdn-cgi/'];
 
@@ -9,26 +12,6 @@ const LOCALE_PREFIX_RE = /^\/[a-z]{2}-[a-z]{2,4}\//i;
 // Auth/gated page paths
 const AUTH_PATH_RE = /\/(login|signin|sign-in|log-in|signup|sign-up|register|logout|sign-out|forgot-password|reset-password|oauth|auth)\b/i;
 
-function extractTagContent(html: string, tag: string): string[] {
-  const re = new RegExp(`<${tag}(?:\\s[^>]*)?>([\\s\\S]*?)</${tag}>`, 'gi');
-  const sections: string[] = [];
-  let match: RegExpExecArray | null;
-  while ((match = re.exec(html)) !== null) {
-    sections.push(match[1]);
-  }
-  return sections;
-}
-
-function extractHrefs(html: string): string[] {
-  const re = /href=["']([^"']+)["']/gi;
-  const hrefs: string[] = [];
-  let match: RegExpExecArray | null;
-  while ((match = re.exec(html)) !== null) {
-    hrefs.push(match[1]);
-  }
-  return hrefs;
-}
-
 function isValidPagePath(path: string): boolean {
   if (SKIP_EXTENSIONS.test(path)) return false;
   if (SKIP_PATH_PREFIXES.some(p => path.startsWith(p))) return false;
@@ -38,7 +21,7 @@ function isValidPagePath(path: string): boolean {
   return true;
 }
 
-function collectLinks(
+function filterLinks(
   hrefs: string[],
   rootUrl: string,
   origin: string,
@@ -50,7 +33,12 @@ function collectLinks(
     if (results.length >= limit) break;
     if (!raw) continue;
     const trimmed = raw.trim();
-    if (trimmed.startsWith('#') || trimmed.startsWith('javascript:') || trimmed.startsWith('mailto:') || trimmed.startsWith('tel:')) continue;
+    if (
+      trimmed.startsWith('#') ||
+      trimmed.startsWith('javascript:') ||
+      trimmed.startsWith('mailto:') ||
+      trimmed.startsWith('tel:')
+    ) continue;
 
     let resolved: URL;
     try {
@@ -82,34 +70,35 @@ export async function crawlUrls(rootUrl: string, limit = 5): Promise<string[]> {
   seen.add(normRoot);
   results.push(normRoot);
 
-  let html: string;
+  const browser = await puppeteer.launch({
+    headless: 'shell',
+    args: PUPPETEER_ARGS,
+  });
+
   try {
-    const res = await fetch(rootUrl, {
-      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; WebYes/1.0)' },
-      signal: AbortSignal.timeout(10_000),
-      redirect: 'follow',
-    });
-    if (!res.ok) return results;
-    html = await res.text();
-  } catch (err) {
-    console.warn(`[crawler] fetch failed for ${rootUrl}: ${(err as Error).message}`);
-    return results;
-  }
+    const page = await browser.newPage();
+    await page.setExtraHTTPHeaders({ 'User-Agent': 'Mozilla/5.0 (compatible; WebScanner/1.0)' });
 
-  // Phase 1: prefer links from <nav> and <header> sections
-  const navSections = [
-    ...extractTagContent(html, 'nav'),
-    ...extractTagContent(html, 'header'),
-  ];
+    const response = await page.goto(rootUrl, { waitUntil: 'domcontentloaded', timeout: 15_000 });
+    if (!response || !response.ok()) return results;
 
-  for (const section of navSections) {
-    collectLinks(extractHrefs(section), rootUrl, origin, seen, results, limit);
-    if (results.length >= limit) break;
-  }
+    // Phase 1: links from <nav> and <header> — querySelectorAll handles nested elements correctly
+    const navHrefs = await page.evaluate(() =>
+      Array.from(document.querySelectorAll('nav a[href], header a[href]'))
+        .map(a => (a as HTMLAnchorElement).getAttribute('href') ?? '')
+    );
+    filterLinks(navHrefs, rootUrl, origin, seen, results, limit);
 
-  // Phase 2: fall back to all links on the page if nav didn't fill the quota
-  if (results.length < limit) {
-    collectLinks(extractHrefs(html), rootUrl, origin, seen, results, limit);
+    // Phase 2: all <a href> links if nav/header didn't fill the quota
+    if (results.length < limit) {
+      const allHrefs = await page.evaluate(() =>
+        Array.from(document.querySelectorAll('a[href]'))
+          .map(a => (a as HTMLAnchorElement).getAttribute('href') ?? '')
+      );
+      filterLinks(allHrefs, rootUrl, origin, seen, results, limit);
+    }
+  } finally {
+    await browser.close();
   }
 
   return results;
