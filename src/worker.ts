@@ -21,6 +21,17 @@ async function processCrawlJob(job: Job<CrawlJobData>): Promise<void> {
 
   console.log(`[crawl:${scan_job_id}] crawling ${url} (limit=${crawl_limit})`);
 
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const redis: any = await (scanQueue as any).client;
+
+  // Initialise the counter BEFORE crawling so no scan job that gets picked up
+  // during enqueueing can race against an uninitialised counter.
+  // We use crawl_limit as a temporary ceiling; we update 'total' once the real
+  // URL count is known. 'done' starts at 0 and is only incremented by scan jobs,
+  // so initialising early is safe.
+  await redis.hset(`completion:${scan_job_id}`, 'total', String(crawl_limit), 'done', '0', 'succeeded', '0', 'failed', '0');
+  await redis.expire(`completion:${scan_job_id}`, 86400);
+
   let urls: string[];
   try {
     urls = await crawlUrls(url, crawl_limit);
@@ -29,20 +40,19 @@ async function processCrawlJob(job: Job<CrawlJobData>): Promise<void> {
     urls = [url];
   }
 
+  // Update the counter with the real URL count now that crawling is done.
+  await redis.hset(`completion:${scan_job_id}`, 'total', String(urls.length));
+
   console.log(`[crawl:${scan_job_id}] discovered ${urls.length} url(s):`);
   urls.forEach((u, i) => console.log(`  ${i + 1}. ${u}`));
 
-  // A cancel may have arrived during the crawl fetch — don't enqueue any scans.
+  // A cancel may have arrived during the crawl — don't enqueue any scans.
   if (await isCancelled(scan_job_id)) {
     console.log(`[crawl:${scan_job_id}] cancelled before enqueueing scans — aborting`);
     return;
   }
 
-  // Initialise Redis completion counter + store callback_url for the cancel endpoint
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const redis: any = await (scanQueue as any).client;
-  await redis.hset(`completion:${scan_job_id}`, 'total', String(urls.length), 'done', '0', 'succeeded', '0', 'failed', '0');
-  await redis.expire(`completion:${scan_job_id}`, 86400);
+  // Store callback_url so the cancel endpoint can fire it without job.data access.
   await redis.set(`meta:${scan_job_id}:callback_url`, callback_url, 'EX', 86400);
 
   // Enqueue one scan job per discovered URL
@@ -89,7 +99,7 @@ async function processScanJob(job: Job<ScanJobData>): Promise<void> {
     }
     const data = parseResults(raw, strategy);
     success = true;
-    await postCallback(callback_url, { scan_job_id, url, success: true, data });
+    await postCallback(callback_url, { scan_job_id, url, total_urls: total_pages, success: true, data });
   } catch (err) {
     if (err instanceof ScanError && err.code === 'CANCELLED') {
       console.log(`[scan:${scan_job_id}] cancelled — skipped ${url}`);
@@ -105,7 +115,7 @@ async function processScanJob(job: Job<ScanJobData>): Promise<void> {
     const detail = err instanceof ScanError
       ? { error: err.message, code: err.code }
       : { error: (err as Error).message ?? 'Scan failed', code: 'CHROME_ERROR' };
-    await postCallback(callback_url, { scan_job_id, url, success: false, ...detail });
+    await postCallback(callback_url, { scan_job_id, url, total_urls: total_pages, success: false, ...detail });
   }
 
   // Atomically increment the completion counter
@@ -116,25 +126,31 @@ async function processScanJob(job: Job<ScanJobData>): Promise<void> {
 
   console.log(`[scan] done (${done}/${total_pages}) — ${url}`);
 
-  if (done === total_pages) {
-    const [succeededStr, failedStr] = await Promise.all([
-      redis.hget(`completion:${scan_job_id}`, 'succeeded'),
-      redis.hget(`completion:${scan_job_id}`, 'failed'),
-    ]);
-    const succeeded = parseInt(succeededStr ?? '0', 10);
-    const failed = parseInt(failedStr ?? '0', 10);
+  // Use >= to handle BullMQ retries that can push done past total_pages.
+  // The NX flag ensures only one job fires the complete event even when
+  // multiple scans reach the threshold in the same tick.
+  if (done >= total_pages) {
+    const fired = await redis.set(`completing:${scan_job_id}`, '1', 'EX', 3600, 'NX');
+    if (fired) {
+      const [succeededStr, failedStr] = await Promise.all([
+        redis.hget(`completion:${scan_job_id}`, 'succeeded'),
+        redis.hget(`completion:${scan_job_id}`, 'failed'),
+      ]);
+      const succeeded = parseInt(succeededStr ?? '0', 10);
+      const failed = parseInt(failedStr ?? '0', 10);
 
-    console.log(`[scan:${scan_job_id}] ✓ all ${total_pages} complete — succeeded=${succeeded} failed=${failed}`);
+      console.log(`[scan:${scan_job_id}] ✓ all ${total_pages} complete — succeeded=${succeeded} failed=${failed}`);
 
-    await postCallback(callback_url, {
-      event: 'complete',
-      scan_job_id,
-      total_urls: total_pages,
-      succeeded,
-      failed,
-    });
+      await postCallback(callback_url, {
+        event: 'complete',
+        scan_job_id,
+        total_urls: total_pages,
+        succeeded,
+        failed,
+      });
 
-    await redis.del(`completion:${scan_job_id}`);
+      await redis.del(`completion:${scan_job_id}`);
+    }
   }
 }
 

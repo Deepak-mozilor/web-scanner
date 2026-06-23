@@ -77,9 +77,9 @@ export async function crawlUrls(rootUrl: string, limit = 5): Promise<string[]> {
 
   try {
     const page = await browser.newPage();
-    await page.setExtraHTTPHeaders({ 'User-Agent': 'Mozilla/5.0 (compatible; WebScanner/1.0)' });
+    await page.setUserAgent('Mozilla/5.0 (compatible; WebScanner/1.0)');
 
-    const response = await page.goto(rootUrl, { waitUntil: 'domcontentloaded', timeout: 15_000 });
+    const response = await page.goto(rootUrl, { waitUntil: 'networkidle2', timeout: 15_000 });
     if (!response || !response.ok()) return results;
 
     // Phase 1: links from <nav> and <header> — querySelectorAll handles nested elements correctly

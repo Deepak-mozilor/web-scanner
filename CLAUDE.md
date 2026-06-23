@@ -30,7 +30,7 @@ This is a single Express API that wraps [Lighthouse](https://github.com/GoogleCh
 - `src/scanner.ts` emits a `RunnerResult`; `src/parser.ts` owns all interpretation. The entry point `index.ts` only starts the HTTP listener.
 
 **Security measures in place (`src/server.ts`):**
-- Rate limiting: `POST /scan` is capped at 10 requests/min per IP via `express-rate-limit`
+- Rate limiting: `POST /scan` is capped at 3 requests/min per IP via `express-rate-limit`
 - SSRF protection: URLs are rejected if they use non-http(s) schemes or resolve to private/internal IP ranges (`10.x`, `192.168.x`, `172.16–31.x`, `169.254.x`, `localhost`, IPv6 loopback)
-- Input validation: `categories` is checked against an allowlist (`performance`, `accessibility`, `best-practices`, `seo`, `pwa`); `timeout` is bounded to 5,000–120,000ms
+- Input validation: `categories` is checked against an allowlist (`performance`, `accessibility`, `best-practices`, `seo`, `pwa`); `timeout` is bounded to 5,000–300,000ms
 - Error sanitization: scan errors return a generic message to callers; full error detail is logged server-side only
