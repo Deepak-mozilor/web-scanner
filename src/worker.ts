@@ -163,7 +163,7 @@ export function startWorker(): Worker<AnyJobData, void, 'crawl' | 'scan'> {
     throw new UnrecoverableError(`Unknown job type: ${job.name}`);
   }, {
     connection: createRedisConnection(),
-    concurrency: 5,
+    concurrency: parseInt(process.env.WORKER_CONCURRENCY ?? '5', 10),
     lockDuration: 300_000,
     lockRenewTime: 100_000,
   });

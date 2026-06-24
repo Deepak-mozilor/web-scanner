@@ -25,6 +25,7 @@ services:
     environment:
       REDIS_URL: redis://redis:6379
       SCANNER_SECRET: ${SCANNER_SECRET}
+      WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-2}
     depends_on:
       - redis
 
