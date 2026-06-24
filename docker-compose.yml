@@ -2,11 +2,31 @@ services:
   redis:
     image: redis:7-alpine
     restart: unless-stopped
-    ports:
-      - '6379:6379'
     volumes:
       - redis_data:/data
     command: redis-server --appendonly yes
+
+  api:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      REDIS_URL: redis://redis:6379
+      SCANNER_SECRET: ${SCANNER_SECRET}
+      PORT: 3000
+    depends_on:
+      - redis
+
+  worker:
+    build: .
+    restart: unless-stopped
+    command: node dist/worker.js
+    environment:
+      REDIS_URL: redis://redis:6379
+      SCANNER_SECRET: ${SCANNER_SECRET}
+    depends_on:
+      - redis
 
 volumes:
   redis_data:
