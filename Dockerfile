@@ -1,19 +1,20 @@
-FROM node:20-slim
+FROM node:22-slim
 
-# Chrome dependencies for Puppeteer headless
+# Install Chromium — Puppeteer will use this instead of downloading its own Chrome bundle
 RUN apt-get update && apt-get install -y \
-  libnss3 libatk1.0-0 libatk-bridge2.0-0 libcups2 \
-  libdrm2 libxkbcommon0 libxcomposite1 libxdamage1 \
-  libxfixes3 libxrandr2 libgbm1 libasound2 \
+  chromium \
   --no-install-recommends && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
 COPY package*.json ./
-RUN npm ci
+# Skip Puppeteer's bundled Chrome download — we use system Chromium installed above
+RUN PUPPETEER_SKIP_DOWNLOAD=true npm ci
 
 COPY . .
 RUN npm run build && npm prune --omit=dev
+
+ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
 
 EXPOSE 3000
 

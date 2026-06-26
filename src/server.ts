@@ -5,7 +5,7 @@ import { scanQueue, CrawlJobData } from './queue';
 import { postCallback } from './callback';
 
 const app = express();
-app.use(express.json());
+app.use(express.json({ limit: '10mb' }));
 
 // Rate limiter applied only to scan creation, not to cancel (cancels must always get through).
 const noopLimiter: express.RequestHandler = (_req, _res, next) => next();
