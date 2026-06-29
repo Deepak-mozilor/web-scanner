@@ -25,6 +25,9 @@ export interface AuditItem {
   wastedBytes?: number;
   wastedMs?: number;
   items?: Record<string, unknown>[];
+  // From axe-core via details.debugData — only present on failing a11y audits.
+  impact?: string;       // "critical" | "serious" | "moderate" | "minor"
+  tags?: string[];       // e.g. ["wcag2a", "wcag2aa", "wcag143"]
 }
 
 export interface ChecklistItem {
@@ -47,6 +50,8 @@ export interface InsightItem {
 export interface PassedAudit {
   id: string;
   title: string;
+  description: string;
+  learnMoreUrl?: string;
 }
 
 export interface Summary {
@@ -56,12 +61,25 @@ export interface Summary {
   nonCritical: number;
 }
 
+export interface ManualAudit {
+  id: string;
+  title: string;
+  description: string;
+}
+
+export interface NotApplicableAudit {
+  id: string;
+  title: string;
+}
+
 export interface CategoryGroup {
   score: number | null;
   title: string;
   critical: AuditItem[];
   nonCritical: AuditItem[];
   passed: PassedAudit[];
+  needsReview: ManualAudit[];        // scoreDisplayMode === 'manual'
+  notApplicable: NotApplicableAudit[]; // scoreDisplayMode === 'notApplicable'
 }
 
 export interface FilmstripFrame {
@@ -160,8 +178,10 @@ function toAuditItem(a: { id: string; title: string; description: string; displa
     items?: Record<string, unknown>[] | Record<string, unknown>;
     overallSavingsBytes?: number;
     overallSavingsMs?: number;
+    debugData?: { impact?: string; tags?: string[] };
   } | undefined;
   const learnMoreUrl = extractLearnMoreUrl(a.description);
+  const debugData = details?.debugData;
 
   let items: Record<string, unknown>[] | undefined;
   if (Array.isArray(details?.items) && (details.items as Record<string, unknown>[]).length > 0) {
@@ -187,6 +207,8 @@ function toAuditItem(a: { id: string; title: string; description: string; displa
     wastedBytes: details?.overallSavingsBytes,
     wastedMs: details?.overallSavingsMs,
     items,
+    ...(debugData?.impact && { impact: debugData.impact }),
+    ...(debugData?.tags && { tags: debugData.tags }),
   };
 }
 
@@ -237,7 +259,28 @@ export function parseResults(result: RunnerResult, strategy: string): ParsedResu
 
   const passed: PassedAudit[] = scoreable
     .filter((a) => (a.score as number) >= 0.9)
-    .map((a) => ({ id: a.id, title: a.title }));
+    .map((a) => {
+      const learnMoreUrl = extractLearnMoreUrl(a.description ?? '');
+      return {
+        id: a.id,
+        title: a.title,
+        description: stripLearnMoreLink(a.description ?? ''),
+        ...(learnMoreUrl && { learnMoreUrl }),
+      };
+    });
+
+  // Audits that require human testing (e.g. logical-tab-order, focus-traps).
+  const manualById = new Map(
+    Object.values(lhr.audits)
+      .filter((a) => a.scoreDisplayMode === 'manual')
+      .map((a) => [a.id, { id: a.id, title: a.title, description: stripLearnMoreLink(a.description ?? '') } as ManualAudit])
+  );
+  // Audits that didn't apply to this page (axe found no matching nodes).
+  const naById = new Map(
+    Object.values(lhr.audits)
+      .filter((a) => a.scoreDisplayMode === 'notApplicable')
+      .map((a) => [a.id, { id: a.id, title: a.title } as NotApplicableAudit])
+  );
 
   const criticalById = new Map(critical.map((a) => [a.id, a]));
   const nonCriticalById = new Map(nonCritical.map((a) => [a.id, a]));
@@ -248,11 +291,15 @@ export function parseResults(result: RunnerResult, strategy: string): ParsedResu
     const catCritical: AuditItem[] = [];
     const catNonCritical: AuditItem[] = [];
     const catPassed: PassedAudit[] = [];
+    const catNeedsReview: ManualAudit[] = [];
+    const catNotApplicable: NotApplicableAudit[] = [];
 
     for (const ref of cat.auditRefs) {
       if (criticalById.has(ref.id)) catCritical.push(criticalById.get(ref.id)!);
       else if (nonCriticalById.has(ref.id)) catNonCritical.push(nonCriticalById.get(ref.id)!);
       else if (passedById.has(ref.id)) catPassed.push(passedById.get(ref.id)!);
+      else if (manualById.has(ref.id)) catNeedsReview.push(manualById.get(ref.id)!);
+      else if (naById.has(ref.id)) catNotApplicable.push(naById.get(ref.id)!);
     }
 
     byCategory[key] = {
@@ -261,6 +308,8 @@ export function parseResults(result: RunnerResult, strategy: string): ParsedResu
       critical: catCritical,
       nonCritical: catNonCritical.sort((a, b) => (a.score ?? 0) - (b.score ?? 0)),
       passed: catPassed,
+      needsReview: catNeedsReview,
+      notApplicable: catNotApplicable,
     };
   }
 
