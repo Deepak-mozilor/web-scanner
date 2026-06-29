@@ -191,7 +191,7 @@ And all callbacks from the scanner will include the same header — verify it on
 
 ## Rate Limits & Constraints
 
-- `POST /scan`: 3 requests/min per IP
+- `POST /scan`: 20 requests/min per IP
 - `timeout`: 5,000–300,000 ms
 - BullMQ retries each scan up to 3 times on failure
 

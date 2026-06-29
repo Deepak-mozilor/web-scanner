@@ -80,7 +80,7 @@ The worker POSTs to `callback_url` twice per page and once at the end:
 
 ### Security measures (`src/server.ts`)
 
-- Rate limiting: `POST /scan` capped at 3 req/min per IP (`LOAD_TEST_MODE=true` disables this)
+- Rate limiting: `POST /scan` capped at 20 req/min per IP
 - SSRF protection: rejects non-http(s) schemes and private IP ranges (`10.x`, `192.168.x`, `172.16–31.x`, `169.254.x`, `localhost`, IPv6 loopback)
 - Input validation: `categories` allowlist; `timeout` bounded 5,000–300,000ms; `crawl_limit` bounded 1–20
 - `SCANNER_SECRET` env var: when set, all inbound requests and outbound callbacks must carry `X-Scanner-Secret` header

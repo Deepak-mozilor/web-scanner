@@ -11,21 +11,13 @@ app.use(helmet());
 app.use(express.json({ limit: '10mb' }));
 
 // Rate limiter applied only to scan creation, not to cancel (cancels must always get through).
-const noopLimiter: express.RequestHandler = (_req, _res, next) => next();
-const scanLimiter: express.RequestHandler =
-  process.env.LOAD_TEST_MODE === 'true'
-    ? noopLimiter
-    : rateLimit({
-        windowMs: 60_000,
-        max: 3,
-        standardHeaders: true,
-        legacyHeaders: false,
-        message: { error: 'Too many scan requests, please try again later' },
-      });
-
-if (process.env.LOAD_TEST_MODE === 'true') {
-  console.warn('[server] LOAD_TEST_MODE=true — rate limiter disabled');
-}
+const scanLimiter: express.RequestHandler = rateLimit({
+  windowMs: 60_000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many scan requests, please try again later' },
+});
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function requireScannerSecret(req: Request<any, any, any>, res: Response): boolean {
