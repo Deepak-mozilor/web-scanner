@@ -1,10 +1,13 @@
 import express, { Request, Response, NextFunction } from 'express';
 import rateLimit from 'express-rate-limit';
+import helmet from 'helmet';
+import { promises as dns } from 'dns';
 import { Strategy } from './scanner';
 import { scanQueue, CrawlJobData } from './queue';
 import { postCallback } from './callback';
 
 const app = express();
+app.use(helmet());
 app.use(express.json({ limit: '10mb' }));
 
 // Rate limiter applied only to scan creation, not to cancel (cancels must always get through).
@@ -55,6 +58,31 @@ function isSsrfUrl(raw: string): boolean {
   return false;
 }
 
+// Reject hostnames that can't be a real public domain (e.g. "hhqygsgsycom").
+// A valid domain has at least one dot and a 2+ char TLD made of letters.
+function hasValidDomainShape(raw: string): boolean {
+  try {
+    const host = new URL(raw).hostname;
+    return /\.[a-z]{2,}$/i.test(host);
+  } catch {
+    return false;
+  }
+}
+
+// Confirm the domain actually resolves via DNS before we waste a scan on it.
+// Returns true if the host resolves, false if it doesn't exist (ENOTFOUND).
+// On any other DNS error we return true (don't block scans on transient infra issues).
+async function domainResolves(raw: string): Promise<boolean> {
+  try {
+    const host = new URL(raw).hostname;
+    await dns.lookup(host);
+    return true;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOTFOUND') return false;
+    return true;
+  }
+}
+
 interface ScanBody {
   url: string;
   scan_job_id: string;
@@ -80,6 +108,18 @@ app.post('/scan', scanLimiter, async (req: Request<object, object, ScanBody>, re
 
   if (!url || typeof url !== 'string' || isSsrfUrl(url)) {
     res.status(400).json({ error: 'url is required and must be a valid http/https URL' });
+    return;
+  }
+
+  // Reject obviously fake hostnames (no dot / no real TLD) before doing any work.
+  if (!hasValidDomainShape(url)) {
+    res.status(400).json({ error: 'url does not have a valid domain name' });
+    return;
+  }
+
+  // Confirm the domain actually exists so we don't "succeed" scanning a Chrome error page.
+  if (!(await domainResolves(url))) {
+    res.status(400).json({ error: 'url domain could not be resolved (does not exist)' });
     return;
   }
 

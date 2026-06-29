@@ -97,11 +97,13 @@ export async function runScan(options: ScanOptions): Promise<RunnerResult> {
       headless: 'shell',
       args: PUPPETEER_ARGS,
     });
-    const port = new URL(browser.wsEndpoint()).port;
-    console.log(`[scanner] Chrome ready on port ${port}`);
+    // Run Lighthouse on a Puppeteer-controlled page (page-based API). Passing the
+    // page as the 4th argument lets us set up page state (cookies, auth, viewport)
+    // before auditing, instead of letting Lighthouse open its own isolated tab.
+    const page = await browser.newPage();
+    console.log(`[scanner] Chrome ready`);
 
     const flags = {
-      port: Number(port),
       output: 'json' as const,
       logLevel: 'error' as const,
       onlyCategories: categories,
@@ -115,7 +117,7 @@ export async function runScan(options: ScanOptions): Promise<RunnerResult> {
 
     try {
       console.log(`[scanner] running Lighthouse on ${url}`);
-      const result = await Promise.race([lighthouse(url, flags), timeoutPromise]);
+      const result = await Promise.race([lighthouse(url, flags, undefined, page), timeoutPromise]);
       if (!result) throw new ScanError('Lighthouse returned no result', 'NO_RESULT', 500);
       console.log(`[scanner] Lighthouse finished`);
       return result;
