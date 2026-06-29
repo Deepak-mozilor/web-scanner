@@ -70,6 +70,10 @@ export async function crawlUrls(rootUrl: string, limit = 5): Promise<string[]> {
   seen.add(normRoot);
   results.push(normRoot);
 
+  // Single-page scan: no link discovery needed. Skip the browser launch + page
+  // navigation entirely — the scan step will load the page anyway.
+  if (limit <= 1) return results;
+
   const browser = await puppeteer.launch({
     headless: 'shell',
     args: PUPPETEER_ARGS,
