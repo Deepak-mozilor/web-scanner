@@ -185,6 +185,9 @@ async function processScanJob(job: Job<ScanJobData>): Promise<void> {
 
     // Root failure, or a non-root slot with no backups left → finalise as failed
     // (the failed callback was already sent above for the original attempt).
+    // Record the URL so the 'complete' callback can report the failed list.
+    await redis.rpush(`failed_urls:${scan_job_id}`, url);
+    await redis.expire(`failed_urls:${scan_job_id}`, 86400);
     await redis.hincrby(`completion:${scan_job_id}`, 'failed', 1);
     done = parseInt(await redis.hincrby(`completion:${scan_job_id}`, 'done', 1), 10);
     console.log(`[scan] done (${done}/${total_pages}) ✗ ${isRoot ? 'root not replaced' : 'no backups left'} — ${url}`);
@@ -197,9 +200,10 @@ async function processScanJob(job: Job<ScanJobData>): Promise<void> {
   if (done !== null && done >= total_pages) {
     const fired = await redis.set(`completing:${scan_job_id}`, '1', 'EX', 3600, 'NX');
     if (fired) {
-      const [succeededStr, failedStr] = await Promise.all([
+      const [succeededStr, failedStr, failedUrls] = await Promise.all([
         redis.hget(`completion:${scan_job_id}`, 'succeeded'),
         redis.hget(`completion:${scan_job_id}`, 'failed'),
+        redis.lrange(`failed_urls:${scan_job_id}`, 0, -1),
       ]);
       const succeeded = parseInt(succeededStr ?? '0', 10);
       const failed = parseInt(failedStr ?? '0', 10);
@@ -212,9 +216,10 @@ async function processScanJob(job: Job<ScanJobData>): Promise<void> {
         total_urls: total_pages,
         succeeded,
         failed,
+        failed_urls: failedUrls ?? [],
       });
 
-      await redis.del(`completion:${scan_job_id}`, `backup:${scan_job_id}`, `replaceseq:${scan_job_id}`);
+      await redis.del(`completion:${scan_job_id}`, `backup:${scan_job_id}`, `replaceseq:${scan_job_id}`, `failed_urls:${scan_job_id}`);
     }
   }
 }

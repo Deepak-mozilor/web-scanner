@@ -67,6 +67,7 @@ Both must run simultaneously for the system to function.
 | `meta:{scan_job_id}:callback_url` | Stored at crawl time so the cancel endpoint can fire a `cancelled` callback |
 | `backup:{scan_job_id}` | List of reserve URLs (crawl discovers 2× `crawl_limit`) — `LPOP`ped to replace a failed scan |
 | `replaceseq:{scan_job_id}` | Counter for unique replacement scan job IDs |
+| `failed_urls:{scan_job_id}` | List of URLs whose slot finalised as failed — reported in the `complete` callback |
 
 ### Callback contract
 
@@ -74,7 +75,7 @@ The worker POSTs to `callback_url` once per URL and once at the end:
 
 - **Per-URL** (one per discovered URL): `{ scan_job_id, url, total_urls, success, results }`
   where `results` is keyed by strategy, e.g. `{ desktop: { success, data | error+code }, mobile: { ... } }`
-- **Complete** (once): `{ event:'complete', scan_job_id, total_urls, succeeded, failed }`
+- **Complete** (once): `{ event:'complete', scan_job_id, total_urls, succeeded, failed, failed_urls }` (`failed_urls` lists the URLs of slots that finalised as failed; its length equals `failed`)
 - **Cancelled** (if cancelled): `{ event:'cancelled', scan_job_id, succeeded, failed, removed_pending }`
 
 `strategy` defaults to `'both'` — each URL is scanned for desktop AND mobile, and the two

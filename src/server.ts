@@ -216,6 +216,7 @@ app.post('/scan/:scan_job_id/cancel', async (req: Request, res: Response) => {
       redis.del(`meta:${scanJobId}:callback_url`),
       redis.del(`backup:${scanJobId}`),
       redis.del(`replaceseq:${scanJobId}`),
+      redis.del(`failed_urls:${scanJobId}`),
     ]);
 
     console.log(`[job:${scanJobId}] cancelled — removed ${removed} pending job(s); active scans will stop`);
