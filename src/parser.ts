@@ -33,9 +33,9 @@ export interface AuditItem {
   wastedBytes?: number;      // potential byte savings (performance audits)
   wastedMs?: number;         // potential time savings (performance audits)
   items?: Record<string, unknown>[];  // the raw flagged rows (e.g. each bad image)
-  // From axe-core via details.debugData — only present on failing a11y audits.
-  impact?: string;       // "critical" | "serious" | "moderate" | "minor"
-  tags?: string[];       // e.g. ["wcag2a", "wcag2aa", "wcag143"]
+  impact?: string;       // axe-core severity: "critical" | "serious" | "moderate" | "minor" (failures only)
+  tags?: string[];       // WCAG tags, e.g. ["wcag2a", "wcag143"] (from debugData or the static map)
+  level?: string;        // derived WCAG conformance level: "A" | "AA" | "AAA"
 }
 
 // One row of a Lighthouse "checklist"-style audit (used by insights).
@@ -64,6 +64,8 @@ export interface PassedAudit {
   title: string;
   description: string;
   learnMoreUrl?: string;
+  tags?: string[];       // WCAG tags from the static map (LHR has none on passed audits)
+  level?: string;        // derived WCAG conformance level: "A" | "AA" | "AAA"
 }
 
 // Counts across all scoreable audits for the page.
@@ -154,6 +156,69 @@ function pct(score: number | null | undefined): number | null {
   return score != null ? Math.round(score * 100) : null;
 }
 
+// Static map: Lighthouse accessibility audit id → WCAG tags.
+// Lighthouse a11y audits map 1:1 to axe-core rules and these tags are stable.
+// Needed because Lighthouse only emits tags (via debugData) on FAILING audits —
+// passed audits carry none, so we look them up here to attach a WCAG level.
+// Audits not listed are "best-practice" (no WCAG level) — e.g. heading-order, tabindex.
+const A11Y_WCAG_TAGS: Record<string, string[]> = {
+  'aria-allowed-attr': ['wcag2a', 'wcag412'],
+  'aria-command-name': ['wcag2a', 'wcag412'],
+  'aria-dialog-name': ['wcag2a', 'wcag412'],
+  'aria-hidden-body': ['wcag2a', 'wcag412'],
+  'aria-hidden-focus': ['wcag2a', 'wcag412'],
+  'aria-input-field-name': ['wcag2a', 'wcag412'],
+  'aria-meter-name': ['wcag2a', 'wcag111'],
+  'aria-progressbar-name': ['wcag2a', 'wcag111'],
+  'aria-required-attr': ['wcag2a', 'wcag412'],
+  'aria-required-children': ['wcag2a', 'wcag131'],
+  'aria-required-parent': ['wcag2a', 'wcag131'],
+  'aria-roles': ['wcag2a', 'wcag412'],
+  'aria-toggle-field-name': ['wcag2a', 'wcag412'],
+  'aria-tooltip-name': ['wcag2a', 'wcag412'],
+  'aria-valid-attr-value': ['wcag2a', 'wcag412'],
+  'aria-valid-attr': ['wcag2a', 'wcag412'],
+  'button-name': ['wcag2a', 'wcag412'],
+  'bypass': ['wcag2a', 'wcag241'],
+  'color-contrast': ['wcag2aa', 'wcag143'],
+  'definition-list': ['wcag2a', 'wcag131'],
+  'dlitem': ['wcag2a', 'wcag131'],
+  'document-title': ['wcag2a', 'wcag242'],
+  'duplicate-id-active': ['wcag2a', 'wcag411'],
+  'duplicate-id-aria': ['wcag2a', 'wcag411'],
+  'form-field-multiple-labels': ['wcag2a', 'wcag332'],
+  'frame-title': ['wcag2a', 'wcag241', 'wcag412'],
+  'html-has-lang': ['wcag2a', 'wcag311'],
+  'html-lang-valid': ['wcag2a', 'wcag311'],
+  'html-xml-lang-mismatch': ['wcag2a', 'wcag311'],
+  'image-alt': ['wcag2a', 'wcag111'],
+  'input-button-name': ['wcag2a', 'wcag412'],
+  'input-image-alt': ['wcag2a', 'wcag111'],
+  'label': ['wcag2a', 'wcag131', 'wcag412'],
+  'link-name': ['wcag2a', 'wcag244', 'wcag412'],
+  'list': ['wcag2a', 'wcag131'],
+  'listitem': ['wcag2a', 'wcag131'],
+  'meta-refresh': ['wcag2a', 'wcag221'],
+  'meta-viewport': ['wcag2aa', 'wcag144'],
+  'object-alt': ['wcag2a', 'wcag111'],
+  'select-name': ['wcag2a', 'wcag412'],
+  'table-fake-caption': ['wcag2a', 'wcag131'],
+  'td-has-header': ['wcag2a', 'wcag131'],
+  'td-headers-attr': ['wcag2a', 'wcag131'],
+  'th-has-data-cells': ['wcag2a', 'wcag131'],
+  'valid-lang': ['wcag2aa', 'wcag312'],
+  'video-caption': ['wcag2a', 'wcag122'],
+};
+
+// Derive the WCAG conformance level (A / AA / AAA) from a set of WCAG tags.
+function wcagLevel(tags: string[] | undefined): string | undefined {
+  if (!tags) return undefined;
+  if (tags.some((t) => t === 'wcag2aaa' || t === 'wcag21aaa' || t === 'wcag22aaa')) return 'AAA';
+  if (tags.some((t) => t === 'wcag2aa' || t === 'wcag21aa' || t === 'wcag22aa')) return 'AA';
+  if (tags.some((t) => t === 'wcag2a' || t === 'wcag21a' || t === 'wcag22a')) return 'A';
+  return undefined;
+}
+
 // Convert one raw Lighthouse "insight" audit into our InsightItem shape.
 function toInsightItem(a: {
   id: string;
@@ -211,6 +276,9 @@ function toAuditItem(a: { id: string; title: string; description: string; displa
   } | undefined;
   const learnMoreUrl = extractLearnMoreUrl(a.description);
   const debugData = details?.debugData;
+  // Prefer the runtime tags axe emitted on failure; fall back to the static map.
+  const tags = debugData?.tags ?? A11Y_WCAG_TAGS[a.id];
+  const level = wcagLevel(tags);
 
   // Extract the flagged rows. Most audits put them in an `items` array; checklist
   // audits store them as an object, which we wrap into a single-element array.
@@ -239,7 +307,8 @@ function toAuditItem(a: { id: string; title: string; description: string; displa
     wastedMs: details?.overallSavingsMs,
     items,
     ...(debugData?.impact && { impact: debugData.impact }),
-    ...(debugData?.tags && { tags: debugData.tags }),
+    ...(tags && { tags }),
+    ...(level && { level }),
   };
 }
 
@@ -300,11 +369,15 @@ export function parseResults(result: RunnerResult, strategy: string): ParsedResu
     .filter((a) => (a.score as number) >= 0.9)        // passing
     .map((a) => {
       const learnMoreUrl = extractLearnMoreUrl(a.description ?? '');
+      const tags = A11Y_WCAG_TAGS[a.id];              // LHR has no tags on passed audits
+      const level = wcagLevel(tags);
       return {
         id: a.id,
         title: a.title,
         description: stripLearnMoreLink(a.description ?? ''),
         ...(learnMoreUrl && { learnMoreUrl }),
+        ...(tags && { tags }),
+        ...(level && { level }),
       };
     });
 
