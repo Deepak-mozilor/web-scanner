@@ -76,12 +76,13 @@ export async function crawlUrls(rootUrl: string, limit = 5): Promise<string[]> {
 
   const browser = await puppeteer.launch({
     headless: 'shell',
-    args: PUPPETEER_ARGS,
+    // Set the crawler's user-agent at launch instead of page.setUserAgent()
+    // (the latter's signature is deprecated in newer Puppeteer).
+    args: [...PUPPETEER_ARGS, '--user-agent=Mozilla/5.0 (compatible; WebScanner/1.0)'],
   });
 
   try {
     const page = await browser.newPage();
-    await page.setUserAgent('Mozilla/5.0 (compatible; WebScanner/1.0)');
 
     const response = await page.goto(rootUrl, { waitUntil: 'networkidle2', timeout: 15_000 });
     if (!response || !response.ok()) return results;
