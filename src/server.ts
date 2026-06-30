@@ -2,7 +2,7 @@ import express, { Request, Response, NextFunction } from 'express';
 import rateLimit from 'express-rate-limit';
 import helmet from 'helmet';
 import { promises as dns } from 'dns';
-import { Strategy } from './scanner';
+import { RequestStrategy } from './scanner';
 import { scanQueue, CrawlJobData } from './queue';
 import { postCallback } from './callback';
 
@@ -79,7 +79,7 @@ interface ScanBody {
   url: string;
   scan_job_id: string;
   callback_url: string;
-  strategy?: Strategy;
+  strategy?: RequestStrategy;
   categories?: string[];
   timeout?: number;
   crawl_limit?: number;
@@ -92,7 +92,7 @@ app.post('/scan', scanLimiter, async (req: Request<object, object, ScanBody>, re
     url,
     scan_job_id,
     callback_url,
-    strategy = 'desktop',
+    strategy = 'both',
     categories = ['performance', 'accessibility', 'best-practices', 'seo'],
     timeout = 60_000,
     crawl_limit = 5,
@@ -140,8 +140,8 @@ app.post('/scan', scanLimiter, async (req: Request<object, object, ScanBody>, re
     return;
   }
 
-  if (strategy && !['mobile', 'desktop'].includes(strategy)) {
-    res.status(400).json({ error: 'strategy must be "mobile" or "desktop"' });
+  if (strategy && !['mobile', 'desktop', 'both'].includes(strategy)) {
+    res.status(400).json({ error: 'strategy must be "mobile", "desktop", or "both"' });
     return;
   }
 

@@ -68,11 +68,18 @@ Both must run simultaneously for the system to function.
 
 ### Callback contract
 
-The worker POSTs to `callback_url` once per page and once at the end:
+The worker POSTs to `callback_url` once per URL and once at the end:
 
-- **Per-page** (N times): `{ scan_job_id, url, total_urls, success, data | error+code }`
+- **Per-URL** (one per discovered URL): `{ scan_job_id, url, total_urls, success, results }`
+  where `results` is keyed by strategy, e.g. `{ desktop: { success, data | error+code }, mobile: { ... } }`
 - **Complete** (once): `{ event:'complete', scan_job_id, total_urls, succeeded, failed }`
 - **Cancelled** (if cancelled): `{ event:'cancelled', scan_job_id, succeeded, failed, removed_pending }`
+
+`strategy` defaults to `'both'` — each URL is scanned for desktop AND mobile, and the two
+results are **merged into one callback** (`results.desktop`, `results.mobile`). One scan job
+and one callback per URL; `total_urls` is the URL count. `success` is true only if every
+requested strategy succeeded. Pass `strategy: 'mobile'` or `'desktop'` to scan just one
+(then `results` has a single key).
 
 ### Cancel flow
 

@@ -1,7 +1,12 @@
 import puppeteer, { Browser } from 'puppeteer';
 import type { RunnerResult } from 'lighthouse';
 
+// A single concrete strategy a Lighthouse run uses.
 export type Strategy = 'mobile' | 'desktop';
+// What the API accepts: a concrete strategy, or 'both' (scan mobile AND desktop).
+// 'both' is expanded into two concrete scan jobs at crawl time — runScan itself
+// always receives a concrete Strategy.
+export type RequestStrategy = Strategy | 'both';
 
 export class ScanError extends Error {
   constructor(

@@ -1,11 +1,11 @@
 import { Queue } from 'bullmq';
-import { Strategy } from './scanner';
+import { RequestStrategy } from './scanner';
 
 export interface CrawlJobData {
   url: string;
   scan_job_id: string;
   callback_url: string;
-  strategy: Strategy;
+  strategy: RequestStrategy;   // may be 'both' — expanded into per-strategy scan jobs
   categories: string[];
   timeout: number;
   crawl_limit: number;
@@ -15,10 +15,10 @@ export interface ScanJobData {
   url: string;
   scan_job_id: string;
   callback_url: string;
-  strategy: Strategy;
+  strategy: RequestStrategy;   // may be 'both' — the scan job runs each strategy and combines results
   categories: string[];
   timeout: number;
-  total_pages: number;
+  total_pages: number;         // number of URLs (one scan job + one callback per URL)
 }
 
 export type AnyJobData = CrawlJobData | ScanJobData;
