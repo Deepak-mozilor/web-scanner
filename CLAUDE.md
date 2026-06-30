@@ -68,7 +68,7 @@ Both must run simultaneously for the system to function.
 
 ### Callback contract
 
-The worker POSTs to `callback_url` twice per page and once at the end:
+The worker POSTs to `callback_url` once per page and once at the end:
 
 - **Per-page** (N times): `{ scan_job_id, url, total_urls, success, data | error+code }`
 - **Complete** (once): `{ event:'complete', scan_job_id, total_urls, succeeded, failed }`

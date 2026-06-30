@@ -1,5 +1,6 @@
 import 'dotenv/config';
 import { startWorker } from './src/worker';
+import { closeSharedBrowser } from './src/scanner';
 
 const worker = startWorker();
 
@@ -7,6 +8,7 @@ async function shutdown(signal: string): Promise<void> {
   console.log(`[worker] ${signal} — shutting down`);
   try {
     await worker.close();
+    await closeSharedBrowser();
     console.log('[worker] shutdown complete');
     process.exit(0);
   } catch (err) {

@@ -1,4 +1,4 @@
-import puppeteer from 'puppeteer';
+import puppeteer, { Browser } from 'puppeteer';
 import type { RunnerResult } from 'lighthouse';
 
 export type Strategy = 'mobile' | 'desktop';
@@ -67,6 +67,43 @@ export const PUPPETEER_ARGS = [
 // runs at a time across all jobs.
 let lighthouseQueue: Promise<void> = Promise.resolve();
 
+// Shared browser reused across scans to avoid relaunching Chrome for every page.
+// Two safeguards keep it healthy:
+//   1. Recycle: after MAX_SCANS_PER_BROWSER scans, close + relaunch to bound memory.
+//   2. Crash recovery: if the browser died, relaunch on next use (one scan fails, rest recover).
+// Safe because getBrowser() is only ever called inside the Lighthouse mutex — one scan
+// touches the browser at a time, so there's no concurrent access.
+let sharedBrowser: Browser | null = null;
+let scansOnBrowser = 0;
+const MAX_SCANS_PER_BROWSER = parseInt(process.env.MAX_SCANS_PER_BROWSER ?? '5', 10);
+
+async function getBrowser(): Promise<Browser> {
+  const dead = sharedBrowser != null && !sharedBrowser.connected;
+  const stale = sharedBrowser != null && scansOnBrowser >= MAX_SCANS_PER_BROWSER;
+
+  if (!sharedBrowser || dead || stale) {
+    if (sharedBrowser) {
+      console.log(`[scanner] recycling browser (scans=${scansOnBrowser}, dead=${dead})`);
+      await sharedBrowser.close().catch(() => { /* already gone */ });
+    }
+    console.log('[scanner] launching Chrome');
+    sharedBrowser = await puppeteer.launch({ headless: 'shell', args: PUPPETEER_ARGS });
+    scansOnBrowser = 0;
+  }
+
+  scansOnBrowser++;
+  return sharedBrowser;
+}
+
+// Close the shared browser on process shutdown so Chrome doesn't linger.
+export async function closeSharedBrowser(): Promise<void> {
+  if (sharedBrowser) {
+    await sharedBrowser.close().catch(() => { /* already gone */ });
+    sharedBrowser = null;
+    scansOnBrowser = 0;
+  }
+}
+
 export async function runScan(options: ScanOptions): Promise<RunnerResult> {
   const {
     url,
@@ -92,16 +129,14 @@ export async function runScan(options: ScanOptions): Promise<RunnerResult> {
     // Dynamic import because lighthouse 10+ is ESM-only
     const { default: lighthouse } = await import('lighthouse');
 
-    console.log(`[scanner] launching Chrome`);
-    const browser = await puppeteer.launch({
-      headless: 'shell',
-      args: PUPPETEER_ARGS,
-    });
-    // Run Lighthouse on a Puppeteer-controlled page (page-based API). Passing the
-    // page as the 4th argument lets us set up page state (cookies, auth, viewport)
-    // before auditing, instead of letting Lighthouse open its own isolated tab.
-    const page = await browser.newPage();
-    console.log(`[scanner] Chrome ready`);
+    // Reuse the shared browser (relaunched periodically / on crash by getBrowser).
+    const browser = await getBrowser();
+    // Each scan runs in its own isolated context (separate cookies/cache/storage),
+    // so reusing the browser doesn't bleed state between pages. Lighthouse audits
+    // this Puppeteer-controlled page via the page-based API (4th argument).
+    const context = await browser.createBrowserContext();
+    const page = await context.newPage();
+    console.log(`[scanner] Chrome ready (scan ${scansOnBrowser}/${MAX_SCANS_PER_BROWSER})`);
 
     const flags = {
       output: 'json' as const,
@@ -135,8 +170,9 @@ export async function runScan(options: ScanOptions): Promise<RunnerResult> {
       }
       throw err;
     } finally {
-      await browser.close();
-      console.log(`[scanner] Chrome closed`);
+      // Close only this scan's context — the browser stays alive for the next scan.
+      await context.close().catch(() => { /* browser may have crashed; getBrowser relaunches */ });
+      console.log(`[scanner] scan context closed`);
     }
   } finally {
     release();
