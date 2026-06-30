@@ -65,6 +65,8 @@ Both must run simultaneously for the system to function.
 | `completing:{scan_job_id}` | SET NX guard — ensures only one job fires the `complete` callback |
 | `cancelled:{scan_job_id}` | Cancel flag (TTL 24h) — checked by worker before and after each scan |
 | `meta:{scan_job_id}:callback_url` | Stored at crawl time so the cancel endpoint can fire a `cancelled` callback |
+| `backup:{scan_job_id}` | List of reserve URLs (crawl discovers 2× `crawl_limit`) — `LPOP`ped to replace a failed scan |
+| `replaceseq:{scan_job_id}` | Counter for unique replacement scan job IDs |
 
 ### Callback contract
 
@@ -80,6 +82,29 @@ results are **merged into one callback** (`results.desktop`, `results.mobile`). 
 and one callback per URL; `total_urls` is the URL count. `success` is true only if every
 requested strategy succeeded. Pass `strategy: 'mobile'` or `'desktop'` to scan just one
 (then `results` has a single key).
+
+### Failed-scan replacement
+
+The crawler discovers up to **2× `crawl_limit`** URLs: the first `crawl_limit` are scanned
+(the "slots"), the rest are held in `backup:{id}`. When a scan isn't fully successful (any
+strategy failed), the worker `LPOP`s a backup URL and enqueues a **replacement** scan
+(`isReplacement: true`) for that slot.
+
+**The submitted root URL (slot 0, `isRoot: true`) is never replaced** — if it fails, that's
+the slot's outcome. Only the other discovered pages are eligible for backup replacement.
+
+Callback rules on failure:
+- **Original URL fails** → send a `success:false` callback (so the backend knows the
+  original page failed), then still try a backup.
+- **Backup URL fails** → silent (no callback); try the next backup.
+- **Any scan fully succeeds** → send a `success:true` callback; slot finalised.
+- **Backups exhausted** → slot finalised as failed (no extra callback — the original
+  already reported it).
+
+A slot finalises (ticks the completion counter) on a fully successful scan, or when
+backups run out. Because a failed original *and* a recovered backup both fire callbacks,
+**the backend may receive more than `total_urls` per-URL callbacks** — it should treat the
+`complete` event as the authoritative "all done" signal, not a callback count.
 
 ### Cancel flow
 

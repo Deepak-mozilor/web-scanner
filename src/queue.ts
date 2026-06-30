@@ -18,7 +18,9 @@ export interface ScanJobData {
   strategy: RequestStrategy;   // may be 'both' — the scan job runs each strategy and combines results
   categories: string[];
   timeout: number;
-  total_pages: number;         // number of URLs (one scan job + one callback per URL)
+  total_pages: number;         // number of slots (= primary URL count)
+  isReplacement?: boolean;     // true for backup URLs swapped in after a failure (failures stay silent)
+  isRoot?: boolean;            // true for the submitted root URL — never replaced, even on failure
 }
 
 export type AnyJobData = CrawlJobData | ScanJobData;

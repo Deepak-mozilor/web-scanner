@@ -32,20 +32,31 @@ async function processCrawlJob(job: Job<CrawlJobData>): Promise<void> {
   await redis.hset(`completion:${scan_job_id}`, 'total', String(crawl_limit), 'done', '0', 'succeeded', '0', 'failed', '0');
   await redis.expire(`completion:${scan_job_id}`, 86400);
 
-  let urls: string[];
+  // Discover up to 2× the requested pages: the first crawl_limit are scanned,
+  // the rest become a backup pool to swap in when a scan fails.
+  let discovered: string[];
   try {
-    urls = await crawlUrls(url, crawl_limit);
+    discovered = await crawlUrls(url, crawl_limit * 2);
   } catch (err) {
     console.warn(`[crawl:${scan_job_id}] crawl failed — falling back to root URL: ${(err as Error).message}`);
-    urls = [url];
+    discovered = [url];
   }
 
-  // One scan job (and one combined callback) per URL — even for strategy 'both',
-  // which the scan job runs internally and merges into a single result.
-  await redis.hset(`completion:${scan_job_id}`, 'total', String(urls.length));
+  const primary = discovered.slice(0, crawl_limit);   // scanned now (the "slots")
+  const backups = discovered.slice(crawl_limit);      // reserve for replacements
 
-  console.log(`[crawl:${scan_job_id}] discovered ${urls.length} url(s):`);
-  urls.forEach((u, i) => console.log(`  ${i + 1}. ${u}`));
+  // One slot (= one combined callback) per primary URL. 'total' is the slot count;
+  // each slot is finalised by a successful scan, or by a failure once backups run out.
+  await redis.hset(`completion:${scan_job_id}`, 'total', String(primary.length));
+
+  // Stash the backup URLs so a failing scan can pull a replacement (LPOP).
+  if (backups.length > 0) {
+    await redis.rpush(`backup:${scan_job_id}`, ...backups);
+    await redis.expire(`backup:${scan_job_id}`, 86400);
+  }
+
+  console.log(`[crawl:${scan_job_id}] discovered ${discovered.length} url(s) — ${primary.length} to scan, ${backups.length} backup(s):`);
+  primary.forEach((u, i) => console.log(`  ${i + 1}. ${u}`));
 
   // A cancel may have arrived during the crawl — don't enqueue any scans.
   if (await isCancelled(scan_job_id)) {
@@ -56,9 +67,10 @@ async function processCrawlJob(job: Job<CrawlJobData>): Promise<void> {
   // Store callback_url so the cancel endpoint can fire it without job.data access.
   await redis.set(`meta:${scan_job_id}:callback_url`, callback_url, 'EX', 86400);
 
-  // Enqueue one scan job per discovered URL.
-  for (let i = 0; i < urls.length; i++) {
-    const pageUrl = urls[i];
+  // Enqueue one scan job per primary URL. Slot 0 is the submitted root URL
+  // (crawlUrls always returns it first) — flag it so it's never replaced.
+  for (let i = 0; i < primary.length; i++) {
+    const pageUrl = primary[i];
     const scanJobId = `${scan_job_id}-page-${i}`;
     await scanQueue.add('scan', {
       url: pageUrl,
@@ -67,16 +79,17 @@ async function processCrawlJob(job: Job<CrawlJobData>): Promise<void> {
       strategy,
       categories,
       timeout,
-      total_pages: urls.length,
+      total_pages: primary.length,
+      isRoot: i === 0,
     } as ScanJobData, { jobId: scanJobId });
-    console.log(`[crawl:${scan_job_id}] queued scan job ${i + 1}/${urls.length} → ${pageUrl}`);
+    console.log(`[crawl:${scan_job_id}] queued scan job ${i + 1}/${primary.length}${i === 0 ? ' [root]' : ''} → ${pageUrl}`);
   }
 
-  console.log(`[crawl:${scan_job_id}] all ${urls.length} scan jobs enqueued`);
+  console.log(`[crawl:${scan_job_id}] all ${primary.length} scan jobs enqueued (${backups.length} backup url(s) held)`);
 }
 
 async function processScanJob(job: Job<ScanJobData>): Promise<void> {
-  const { url, scan_job_id, callback_url, strategy, categories, timeout, total_pages } = job.data;
+  const { url, scan_job_id, callback_url, strategy, categories, timeout, total_pages, isReplacement, isRoot } = job.data;
 
   if (!url || !scan_job_id || !callback_url) {
     throw new UnrecoverableError(`[scan:${scan_job_id}] malformed payload`);
@@ -127,24 +140,61 @@ async function processScanJob(job: Job<ScanJobData>): Promise<void> {
     }
   }
 
-  // One combined callback per URL, holding every requested strategy's result.
-  // `success` is true only if every strategy succeeded; inspect `results.<strategy>`
-  // for the per-strategy breakdown.
-  const success = allSucceeded;
-  await postCallback(callback_url, { scan_job_id, url, total_urls: total_pages, success, results });
-
-  // Atomically increment the completion counter
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const redis: any = await (scanQueue as any).client;
-  await redis.hincrby(`completion:${scan_job_id}`, success ? 'succeeded' : 'failed', 1);
-  const done: number = parseInt(await redis.hincrby(`completion:${scan_job_id}`, 'done', 1), 10);
 
-  console.log(`[scan] done (${done}/${total_pages}) — ${url}`);
+  // `done` is set when this slot is finalised; left null while we hand off to a backup.
+  let done: number | null = null;
+
+  if (allSucceeded) {
+    // Fully successful (original or recovered backup) → finalise the slot as success.
+    await postCallback(callback_url, { scan_job_id, url, total_urls: total_pages, success: true, results });
+    await redis.hincrby(`completion:${scan_job_id}`, 'succeeded', 1);
+    done = parseInt(await redis.hincrby(`completion:${scan_job_id}`, 'done', 1), 10);
+    console.log(`[scan] done (${done}/${total_pages}) ✓ — ${url}`);
+  } else {
+    // A scan failed. Report it ONLY for the original URL; backup failures stay silent.
+    if (!isReplacement) {
+      await postCallback(callback_url, { scan_job_id, url, total_urls: total_pages, success: false, results });
+      console.log(`[scan:${scan_job_id}] original failed — sent failed callback for ${url}`);
+    } else {
+      console.log(`[scan:${scan_job_id}] backup failed silently — ${url}`);
+    }
+
+    // The submitted root URL is never replaced — if it fails, that's the slot's
+    // outcome. Other slots try to recover with a backup URL.
+    if (!isRoot) {
+      const backupUrl: string | null = await redis.lpop(`backup:${scan_job_id}`);
+      if (backupUrl) {
+        const seq = await redis.incr(`replaceseq:${scan_job_id}`);
+        const replacementJobId = `${scan_job_id}-page-replace-${seq}`;
+        await scanQueue.add('scan', {
+          url: backupUrl,
+          scan_job_id,
+          callback_url,
+          strategy,
+          categories,
+          timeout,
+          total_pages,
+          isReplacement: true,
+        } as ScanJobData, { jobId: replacementJobId });
+        console.log(`[scan:${scan_job_id}] trying backup ${backupUrl}`);
+        return;   // slot not finalised; the backup scan will finalise it
+      }
+    }
+
+    // Root failure, or a non-root slot with no backups left → finalise as failed
+    // (the failed callback was already sent above for the original attempt).
+    await redis.hincrby(`completion:${scan_job_id}`, 'failed', 1);
+    done = parseInt(await redis.hincrby(`completion:${scan_job_id}`, 'done', 1), 10);
+    console.log(`[scan] done (${done}/${total_pages}) ✗ ${isRoot ? 'root not replaced' : 'no backups left'} — ${url}`);
+  }
 
   // Use >= to handle BullMQ retries that can push done past total_pages.
   // The NX flag ensures only one job fires the complete event even when
-  // multiple scans reach the threshold in the same tick.
-  if (done >= total_pages) {
+  // multiple scans reach the threshold in the same tick. (done is null when this
+  // job handed off to a backup and didn't finalise — that path already returned.)
+  if (done !== null && done >= total_pages) {
     const fired = await redis.set(`completing:${scan_job_id}`, '1', 'EX', 3600, 'NX');
     if (fired) {
       const [succeededStr, failedStr] = await Promise.all([
@@ -164,7 +214,7 @@ async function processScanJob(job: Job<ScanJobData>): Promise<void> {
         failed,
       });
 
-      await redis.del(`completion:${scan_job_id}`);
+      await redis.del(`completion:${scan_job_id}`, `backup:${scan_job_id}`, `replaceseq:${scan_job_id}`);
     }
   }
 }

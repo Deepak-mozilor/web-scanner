@@ -210,10 +210,12 @@ app.post('/scan/:scan_job_id/cancel', async (req: Request, res: Response) => {
     const succeeded = parseInt(succeededStr ?? '0', 10);
     const failed = parseInt(failedStr ?? '0', 10);
 
-    // 4. Drop the completion counter so no stray 'complete' callback fires.
+    // 4. Drop the completion counter + backup pool so no stray work fires.
     await Promise.all([
       redis.del(`completion:${scanJobId}`),
       redis.del(`meta:${scanJobId}:callback_url`),
+      redis.del(`backup:${scanJobId}`),
+      redis.del(`replaceseq:${scanJobId}`),
     ]);
 
     console.log(`[job:${scanJobId}] cancelled — removed ${removed} pending job(s); active scans will stop`);
