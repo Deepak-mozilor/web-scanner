@@ -109,7 +109,12 @@ export async function closeSharedBrowser(): Promise<void> {
   }
 }
 
-export async function runScan(options: ScanOptions): Promise<RunnerResult> {
+export interface ScanResult {
+  result: RunnerResult;
+  pageTitle: string;    // the audited page's <title>, captured via Puppeteer
+}
+
+export async function runScan(options: ScanOptions): Promise<ScanResult> {
   const {
     url,
     strategy = 'desktop',
@@ -159,8 +164,10 @@ export async function runScan(options: ScanOptions): Promise<RunnerResult> {
       console.log(`[scanner] running Lighthouse on ${url}`);
       const result = await Promise.race([lighthouse(url, flags, undefined, page), timeoutPromise]);
       if (!result) throw new ScanError('Lighthouse returned no result', 'NO_RESULT', 500);
+      // Capture the page <title> while the page is still open (empty string if unavailable).
+      const pageTitle = await page.title().catch(() => '');
       console.log(`[scanner] Lighthouse finished`);
-      return result;
+      return { result, pageTitle };
     } catch (err) {
       if (err instanceof ScanError) throw err;
 

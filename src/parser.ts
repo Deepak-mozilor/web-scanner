@@ -116,6 +116,7 @@ export interface Screenshots {
 // The final object the worker sends to the backend as the per-page scan result.
 export interface ParsedResult {
   url: string;
+  pageTitle: string;                           // the audited page's <title>
   fetchTime: string;
   strategy: string;                            // "mobile" | "desktop"
   scores: Record<string, CategoryScore>;       // headline score per category
@@ -373,7 +374,7 @@ function toAuditItem(a: { id: string; title: string; description: string; displa
 
 // Main entry point: turn a raw Lighthouse RunnerResult into our ParsedResult.
 // `lhr` (Lighthouse Result) is the big object holding categories, audits, etc.
-export function parseResults(result: RunnerResult, strategy: string): ParsedResult {
+export function parseResults(result: RunnerResult, strategy: string, pageTitle = ''): ParsedResult {
   const { lhr } = result;
 
   // 1. Headline score per category (performance, accessibility, ...).
@@ -505,6 +506,7 @@ export function parseResults(result: RunnerResult, strategy: string): ParsedResu
   // 9. Assemble the final result the worker POSTs to the backend.
   return {
     url: lhr.finalDisplayedUrl,   // the URL actually audited (after redirects)
+    pageTitle,
     fetchTime: lhr.fetchTime,
     strategy,
     scores,

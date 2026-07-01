@@ -113,13 +113,13 @@ async function processScanJob(job: Job<ScanJobData>): Promise<void> {
 
   for (const strat of strategies) {
     try {
-      const raw = await runScan({ url, strategy: strat, categories, timeout, shouldCancel: () => isCancelled(scan_job_id) });
+      const { result: raw, pageTitle } = await runScan({ url, strategy: strat, categories, timeout, shouldCancel: () => isCancelled(scan_job_id) });
       // Cancel may have landed while Lighthouse was running — abandon the whole job.
       if (await isCancelled(scan_job_id)) {
         console.log(`[scan:${scan_job_id}] cancelled mid-scan — discarding ${url}`);
         return;
       }
-      results[strat] = { success: true, data: parseResults(raw, strat) };
+      results[strat] = { success: true, data: parseResults(raw, strat, pageTitle) };
       console.log(`[scan:${scan_job_id}] [${strat}] ok — ${url}`);
     } catch (err) {
       if (err instanceof ScanError && err.code === 'CANCELLED') {
