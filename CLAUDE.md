@@ -95,17 +95,15 @@ strategy failed), the worker `LPOP`s a backup URL and enqueues a **replacement**
 the slot's outcome. Only the other discovered pages are eligible for backup replacement.
 
 Callback rules on failure:
-- **Original URL fails** → send a `success:false` callback (so the backend knows the
-  original page failed), then still try a backup.
-- **Backup URL fails** → silent (no callback); try the next backup.
+- **Any scan fails** (original OR backup) → send a `success:false` callback, then (for
+  non-root slots with backups remaining) try a backup.
 - **Any scan fully succeeds** → send a `success:true` callback; slot finalised.
-- **Backups exhausted** → slot finalised as failed (no extra callback — the original
-  already reported it).
+- **Backups exhausted** → slot finalised as failed.
 
 A slot finalises (ticks the completion counter) on a fully successful scan, or when
-backups run out. Because a failed original *and* a recovered backup both fire callbacks,
-**the backend may receive more than `total_urls` per-URL callbacks** — it should treat the
-`complete` event as the authoritative "all done" signal, not a callback count.
+backups run out. Because every failed attempt fires a callback, **the backend may receive
+many more than `total_urls` per-URL callbacks** — it should treat the `complete` event as
+the authoritative "all done" signal, not a callback count.
 
 ### Cancel flow
 

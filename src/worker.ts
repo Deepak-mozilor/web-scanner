@@ -89,7 +89,7 @@ async function processCrawlJob(job: Job<CrawlJobData>): Promise<void> {
 }
 
 async function processScanJob(job: Job<ScanJobData>): Promise<void> {
-  const { url, scan_job_id, callback_url, strategy, categories, timeout, total_pages, isReplacement, isRoot } = job.data;
+  const { url, scan_job_id, callback_url, strategy, categories, timeout, total_pages, isRoot } = job.data;
 
   if (!url || !scan_job_id || !callback_url) {
     throw new UnrecoverableError(`[scan:${scan_job_id}] malformed payload`);
@@ -153,13 +153,9 @@ async function processScanJob(job: Job<ScanJobData>): Promise<void> {
     done = parseInt(await redis.hincrby(`completion:${scan_job_id}`, 'done', 1), 10);
     console.log(`[scan] done (${done}/${total_pages}) ✓ — ${url}`);
   } else {
-    // A scan failed. Report it ONLY for the original URL; backup failures stay silent.
-    if (!isReplacement) {
-      await postCallback(callback_url, { scan_job_id, url, total_urls: total_pages, success: false, results });
-      console.log(`[scan:${scan_job_id}] original failed — sent failed callback for ${url}`);
-    } else {
-      console.log(`[scan:${scan_job_id}] backup failed silently — ${url}`);
-    }
+    // A scan failed — send a failed callback for EVERY failure (original or backup).
+    await postCallback(callback_url, { scan_job_id, url, total_urls: total_pages, success: false, results });
+    console.log(`[scan:${scan_job_id}] failed — sent failed callback for ${url}`);
 
     // The submitted root URL is never replaced — if it fails, that's the slot's
     // outcome. Other slots try to recover with a backup URL.
