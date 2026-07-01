@@ -36,6 +36,7 @@ export interface AuditItem {
   impact?: string;       // axe-core severity: "critical" | "serious" | "moderate" | "minor" (failures only)
   tags?: string[];       // WCAG tags, e.g. ["wcag2a", "wcag143"] (from debugData or the static map)
   level?: string;        // derived WCAG conformance level: "A" | "AA" | "AAA"
+  affects?: string[];    // user groups impacted, e.g. ["blind", "low vision"] (a11y audits only)
 }
 
 // One row of a Lighthouse "checklist"-style audit (used by insights).
@@ -218,6 +219,63 @@ function wcagLevel(tags: string[] | undefined): string | undefined {
   return undefined;
 }
 
+// Static map: Lighthouse accessibility audit id → the user groups the issue affects.
+// Not provided by Lighthouse — this is curated reference data. Groups:
+// "blind" (screen-reader users), "low vision", "color blind", "deaf" (deaf/hard of
+// hearing), "motor" (mobility/keyboard-only), "cognitive" (learning/attention).
+const A11Y_AFFECTED: Record<string, string[]> = {
+  'accesskeys': ['motor', 'blind'],
+  'aria-allowed-attr': ['blind'],
+  'aria-command-name': ['blind'],
+  'aria-dialog-name': ['blind'],
+  'aria-hidden-body': ['blind'],
+  'aria-hidden-focus': ['blind'],
+  'aria-input-field-name': ['blind'],
+  'aria-meter-name': ['blind'],
+  'aria-progressbar-name': ['blind'],
+  'aria-required-attr': ['blind'],
+  'aria-required-children': ['blind'],
+  'aria-required-parent': ['blind'],
+  'aria-roles': ['blind'],
+  'aria-toggle-field-name': ['blind'],
+  'aria-tooltip-name': ['blind'],
+  'aria-valid-attr-value': ['blind'],
+  'aria-valid-attr': ['blind'],
+  'button-name': ['blind'],
+  'bypass': ['blind', 'motor'],
+  'color-contrast': ['low vision', 'color blind'],
+  'definition-list': ['blind'],
+  'dlitem': ['blind'],
+  'document-title': ['blind', 'cognitive'],
+  'duplicate-id-active': ['blind'],
+  'duplicate-id-aria': ['blind'],
+  'form-field-multiple-labels': ['blind', 'cognitive'],
+  'frame-title': ['blind'],
+  'heading-order': ['blind', 'cognitive'],
+  'html-has-lang': ['blind'],
+  'html-lang-valid': ['blind'],
+  'html-xml-lang-mismatch': ['blind'],
+  'image-alt': ['blind'],
+  'input-button-name': ['blind'],
+  'input-image-alt': ['blind'],
+  'label': ['blind', 'motor', 'cognitive'],
+  'link-name': ['blind'],
+  'list': ['blind'],
+  'listitem': ['blind'],
+  'meta-refresh': ['cognitive', 'blind'],
+  'meta-viewport': ['low vision'],
+  'object-alt': ['blind'],
+  'select-name': ['blind'],
+  'skip-link': ['blind', 'motor'],
+  'tabindex': ['motor', 'blind'],
+  'table-fake-caption': ['blind'],
+  'td-has-header': ['blind'],
+  'td-headers-attr': ['blind'],
+  'th-has-data-cells': ['blind'],
+  'valid-lang': ['blind'],
+  'video-caption': ['deaf'],
+};
+
 // Convert one raw Lighthouse "insight" audit into our InsightItem shape.
 function toInsightItem(a: {
   id: string;
@@ -278,6 +336,7 @@ function toAuditItem(a: { id: string; title: string; description: string; displa
   // Prefer the runtime tags axe emitted on failure; fall back to the static map.
   const tags = debugData?.tags ?? A11Y_WCAG_TAGS[a.id];
   const level = wcagLevel(tags);
+  const affects = A11Y_AFFECTED[a.id];
 
   // Extract the flagged rows. Most audits put them in an `items` array; checklist
   // audits store them as an object, which we wrap into a single-element array.
@@ -308,6 +367,7 @@ function toAuditItem(a: { id: string; title: string; description: string; displa
     ...(debugData?.impact && { impact: debugData.impact }),
     ...(tags && { tags }),
     ...(level && { level }),
+    ...(affects && { affects }),
   };
 }
 
