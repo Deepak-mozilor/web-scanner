@@ -121,8 +121,7 @@ export interface ParsedResult {
   metrics: Record<string, MetricValue>;        // core web vitals etc.
   insights: InsightItem[];                      // richer guidance audits
   summary: Summary;                             // total/passed/critical counts
-  passed: PassedAudit[];                        // all passed audits (flat list)
-  byCategory: Record<string, CategoryGroup>;    // audits grouped per category
+  byCategory: Record<string, CategoryGroup>;    // audits grouped per category (each has its own `passed`)
   screenshots: Screenshots;
 }
 
@@ -457,7 +456,6 @@ export function parseResults(result: RunnerResult, strategy: string): ParsedResu
       critical: critical.length,
       nonCritical: nonCritical.length,
     },
-    passed,
     byCategory,
     screenshots,
   };
