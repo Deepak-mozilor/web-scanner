@@ -37,6 +37,7 @@ export interface AuditItem {
   tags?: string[];       // WCAG tags, e.g. ["wcag2a", "wcag143"] (from debugData or the static map)
   level?: string;        // derived WCAG conformance level: "A" | "AA" | "AAA"
   affects?: string[];    // user groups impacted, e.g. ["blind", "low vision"] (a11y audits only)
+  responsibility?: string; // who typically fixes it: "Development" | "Design" | "Content"
 }
 
 // One row of a Lighthouse "checklist"-style audit (used by insights).
@@ -277,6 +278,24 @@ const A11Y_AFFECTED: Record<string, string[]> = {
   'video-caption': ['deaf'],
 };
 
+// Which discipline typically owns the fix. Most audits are code fixes → "Development"
+// is the default; these audits map to "Design" (visual/styling) or "Content" (copy/media).
+const RESPONSIBILITY_OVERRIDES: Record<string, string> = {
+  'color-contrast': 'Design',
+  'meta-viewport': 'Design',
+  'target-size': 'Design',
+  'image-alt': 'Content',
+  'input-image-alt': 'Content',
+  'object-alt': 'Content',
+  'video-caption': 'Content',
+  'document-title': 'Content',
+  'meta-description': 'Content',
+};
+
+function responsibilityFor(id: string): string {
+  return RESPONSIBILITY_OVERRIDES[id] ?? 'Development';
+}
+
 // Convert one raw Lighthouse "insight" audit into our InsightItem shape.
 function toInsightItem(a: {
   id: string;
@@ -369,6 +388,7 @@ function toAuditItem(a: { id: string; title: string; description: string; displa
     ...(tags && { tags }),
     ...(level && { level }),
     ...(affects && { affects }),
+    responsibility: responsibilityFor(a.id),
   };
 }
 
