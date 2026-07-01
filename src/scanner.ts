@@ -80,7 +80,7 @@ let lighthouseQueue: Promise<void> = Promise.resolve();
 // touches the browser at a time, so there's no concurrent access.
 let sharedBrowser: Browser | null = null;
 let scansOnBrowser = 0;
-const MAX_SCANS_PER_BROWSER = parseInt(process.env.MAX_SCANS_PER_BROWSER ?? '5', 10);
+const MAX_SCANS_PER_BROWSER = parseInt(process.env.MAX_SCANS_PER_BROWSER ?? '10', 10);
 
 async function getBrowser(): Promise<Browser> {
   const dead = sharedBrowser != null && !sharedBrowser.connected;
