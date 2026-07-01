@@ -67,6 +67,15 @@ async function processCrawlJob(job: Job<CrawlJobData>): Promise<void> {
   // Store callback_url so the cancel endpoint can fire it without job.data access.
   await redis.set(`meta:${scan_job_id}:callback_url`, callback_url, 'EX', 86400);
 
+  // Tell the backend which pages were discovered, before any scan runs.
+  await postCallback(callback_url, {
+    event: 'crawled',
+    scan_job_id,
+    total_urls: primary.length,
+    urls: primary,
+    backup_urls: backups,
+  });
+
   // Enqueue one scan job per primary URL. Slot 0 is the submitted root URL
   // (crawlUrls always returns it first) — flag it so it's never replaced.
   for (let i = 0; i < primary.length; i++) {
