@@ -36,6 +36,8 @@ export interface AuditItem {
   impact?: string;       // axe-core severity: "critical" | "serious" | "moderate" | "minor" (failures only)
   tags?: string[];       // WCAG tags, e.g. ["wcag2a", "wcag143"] (from debugData or the static map)
   level?: string;        // derived WCAG conformance level: "A" | "AA" | "AAA"
+  wcagCriterion?: string; // derived success criterion, e.g. "1.1.1" (from the tags)
+  wcagVersion?: string;  // derived WCAG version that introduced it, e.g. "2.0"
   affects?: string[];    // user groups impacted, e.g. ["blind", "low vision"] (a11y audits only)
   responsibility?: string; // who typically fixes it: "Development" | "Design" | "Content"
 }
@@ -222,6 +224,28 @@ function wcagLevel(tags: string[] | undefined): string | undefined {
   return undefined;
 }
 
+// Extract the WCAG success criterion (e.g. "1.4.3") from a numeric tag like "wcag143".
+// Format: wcag<principle><guideline><criterion> → "principle.guideline.criterion".
+function wcagCriterion(tags: string[] | undefined): string | undefined {
+  if (!tags) return undefined;
+  for (const t of tags) {
+    const m = /^wcag(\d)(\d)(\d+)$/.exec(t);
+    if (m) return `${m[1]}.${m[2]}.${m[3]}`;
+  }
+  return undefined;
+}
+
+// Extract the WCAG version that introduced the criterion (e.g. "2.0") from a level
+// tag like "wcag2aa" (2.0), "wcag21aa" (2.1), "wcag22aa" (2.2).
+function wcagVersion(tags: string[] | undefined): string | undefined {
+  if (!tags) return undefined;
+  for (const t of tags) {
+    const m = /^wcag(2\d?)a+$/.exec(t);
+    if (m) return { '2': '2.0', '21': '2.1', '22': '2.2' }[m[1]];
+  }
+  return undefined;
+}
+
 // Static map: Lighthouse accessibility audit id → the user groups the issue affects.
 // Not provided by Lighthouse — this is curated reference data. Groups:
 // "blind" (screen-reader users), "low vision", "color blind", "deaf" (deaf/hard of
@@ -357,6 +381,8 @@ function toAuditItem(a: { id: string; title: string; description: string; displa
   // Prefer the runtime tags axe emitted on failure; fall back to the static map.
   const tags = debugData?.tags ?? A11Y_WCAG_TAGS[a.id];
   const level = wcagLevel(tags);
+  const criterion = wcagCriterion(tags);
+  const version = wcagVersion(tags);
   const affects = A11Y_AFFECTED[a.id];
 
   // Extract the flagged rows. Most audits put them in an `items` array; checklist
@@ -388,6 +414,8 @@ function toAuditItem(a: { id: string; title: string; description: string; displa
     ...(debugData?.impact && { impact: debugData.impact }),
     ...(tags && { tags }),
     ...(level && { level }),
+    ...(criterion && { wcagCriterion: criterion }),
+    ...(version && { wcagVersion: version }),
     ...(affects && { affects }),
     responsibility: responsibilityFor(a.id),
   };

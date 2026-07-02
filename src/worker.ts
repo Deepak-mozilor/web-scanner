@@ -22,6 +22,10 @@ async function processCrawlJob(job: Job<CrawlJobData>): Promise<void> {
     throw new UnrecoverableError(`[crawl:${scan_job_id}] malformed payload`);
   }
 
+  // Signal that the worker has picked up the job and processing has begun
+  // (queued → running), before crawling starts.
+  await postCallback(callback_url, { event: 'started', scan_job_id, url });
+
   console.log(`[crawl:${scan_job_id}] crawling ${url} (limit=${crawl_limit}, strategy=${strategy})`);
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
