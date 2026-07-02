@@ -74,6 +74,7 @@ Both must run simultaneously for the system to function.
 The worker POSTs to `callback_url` at crawl time, once per URL, and once at the end:
 
 - **Crawled** (once, before any scan): `{ event:'crawled', scan_job_id, total_urls, urls, backup_urls }` — the discovered pages (`urls` = the ones that will be scanned, `backup_urls` = reserves)
+- **Scanning** (once per scan, before it runs): `{ event:'scanning', scan_job_id, url, total_urls }` — fires before every URL scan (originals and backups)
 - **Per-URL** (one per discovered URL): `{ scan_job_id, url, total_urls, success, results }`
   where `results` is keyed by strategy, e.g. `{ desktop: { success, data | error+code }, mobile: { ... } }`.
   When S3 offloading is enabled (`S3_BUCKET` set), a **successful** per-URL callback replaces

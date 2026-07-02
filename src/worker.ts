@@ -118,6 +118,9 @@ async function processScanJob(job: Job<ScanJobData>): Promise<void> {
 
   console.log(`[scan:${scan_job_id}] attempt=${job.attemptsMade + 1} scanning ${url} (${strategies.join('+')})`);
 
+  // Signal that this URL's scan is about to begin (fires before every URL scan).
+  await postCallback(callback_url, { event: 'scanning', scan_job_id, url, total_urls: total_pages });
+
   // Run each strategy and collect its outcome. The results are merged into a
   // single callback for this URL — keyed by strategy ("desktop" / "mobile").
   const results: Record<string, unknown> = {};
