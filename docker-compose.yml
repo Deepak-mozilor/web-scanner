@@ -28,6 +28,13 @@ services:
       # 1 = strictly ordered callbacks (one job fully finishes before the next).
       # The Lighthouse mutex already serialises scans, so this costs little.
       WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-1}
+      # S3 offloading. Credentials come from the EC2 instance role (no keys here).
+      # Requires the instance metadata hop limit to be >= 2 so the container can
+      # reach IMDS from the docker bridge network — see deploy notes.
+      S3_BUCKET: ${S3_BUCKET}
+      AWS_REGION: ${AWS_REGION:-us-east-1}
+      S3_URL_TTL_SECONDS: ${S3_URL_TTL_SECONDS:-3600}
+      S3_PUBLIC_BASE_URL: ${S3_PUBLIC_BASE_URL:-}
     depends_on:
       - redis
 

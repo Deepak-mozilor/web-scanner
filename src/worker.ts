@@ -3,6 +3,9 @@ import { runScan, ScanError, Strategy } from './scanner';
 import { parseResults } from './parser';
 import { crawlUrls } from './crawler';
 import { postCallback } from './callback';
+import { s3Enabled, uploadPayload, offloadScreenshots } from './storage';
+import type { ParsedResult } from './parser';
+import { randomUUID } from 'crypto';
 import { createRedisConnection, scanQueue, CrawlJobData, ScanJobData, AnyJobData, QUEUE_NAME } from './queue';
 
 async function isCancelled(scanJobId: string): Promise<boolean> {
@@ -157,7 +160,39 @@ async function processScanJob(job: Job<ScanJobData>): Promise<void> {
 
   if (allSucceeded) {
     // Fully successful (original or recovered backup) → finalise the slot as success.
-    await postCallback(callback_url, { scan_job_id, url, total_urls: total_pages, success: true, results });
+    // First offload each strategy's screenshots to S3 as PUBLIC objects, replacing the
+    // base64 blobs in `results` with permanent public URLs. A random UUID in the key
+    // makes the public URL non-enumerable. On failure, that strategy keeps its inline
+    // base64 (storage:'inline') and the scan still succeeds.
+    if (s3Enabled()) {
+      for (const strat of strategies) {
+        const r = results[strat] as { success: true; data: ParsedResult };
+        const prefix = `screenshots/${scan_job_id}/${randomUUID()}/${strat}`;
+        try {
+          r.data.screenshots = await offloadScreenshots(prefix, r.data.screenshots);
+        } catch (err) {
+          console.warn(`[scan:${scan_job_id}] screenshot offload failed for ${strat}, leaving inline: ${(err as Error).message}`);
+        }
+      }
+    }
+
+    // The `results` object is the only large payload — offload it to S3 (if configured)
+    // and send just a presigned URL. On upload failure, fall back to inline results so
+    // no data is lost (rather than failing the whole scan and re-running Lighthouse).
+    const base = { scan_job_id, url, total_urls: total_pages, success: true };
+    let payload: Record<string, unknown>;
+    if (s3Enabled()) {
+      try {
+        const results_url = await uploadPayload(`payloads/${scan_job_id}/${job.id}.json`, results);
+        payload = { ...base, results_url };
+      } catch (err) {
+        console.warn(`[scan:${scan_job_id}] S3 upload failed, sending inline for ${url}: ${(err as Error).message}`);
+        payload = { ...base, results };
+      }
+    } else {
+      payload = { ...base, results };
+    }
+    await postCallback(callback_url, payload);
     await redis.hincrby(`completion:${scan_job_id}`, 'succeeded', 1);
     done = parseInt(await redis.hincrby(`completion:${scan_job_id}`, 'done', 1), 10);
     console.log(`[scan] done (${done}/${total_pages}) ✓ — ${url}`);

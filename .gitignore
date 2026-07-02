@@ -6,3 +6,6 @@ dist/
 scan-results/
 *.scan.json
 scripts/
+
+# Raw Lighthouse dumps from manual testing
+raw-lhr*.json

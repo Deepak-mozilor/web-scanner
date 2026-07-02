@@ -75,7 +75,15 @@ The worker POSTs to `callback_url` at crawl time, once per URL, and once at the 
 
 - **Crawled** (once, before any scan): `{ event:'crawled', scan_job_id, total_urls, urls, backup_urls }` — the discovered pages (`urls` = the ones that will be scanned, `backup_urls` = reserves)
 - **Per-URL** (one per discovered URL): `{ scan_job_id, url, total_urls, success, results }`
-  where `results` is keyed by strategy, e.g. `{ desktop: { success, data | error+code }, mobile: { ... } }`
+  where `results` is keyed by strategy, e.g. `{ desktop: { success, data | error+code }, mobile: { ... } }`.
+  When S3 offloading is enabled (`S3_BUCKET` set), a **successful** per-URL callback replaces
+  `results` with `results_url` — a **private** presigned GET URL (default 1h) the backend fetches
+  to obtain the same `results` object. Failed per-URL callbacks always send `results` inline (small).
+  Inside `results`, each strategy's `data.screenshots` has a `storage` discriminator: when S3 is on
+  it is `'s3'` and `final`/`fullPage`/`filmstrip[].data` are **permanent public https URLs**; when
+  off it is `'inline'` base64 data URIs. If one strategy's screenshot upload fails it falls back to
+  `'inline'`, so a single callback may **mix** `'s3'` and `'inline'` — branch on the per-object
+  `storage` field.
 - **Complete** (once): `{ event:'complete', scan_job_id, total_urls, succeeded, failed, failed_urls }` (`failed_urls` lists the URLs of slots that finalised as failed; its length equals `failed`)
 - **Cancelled** (if cancelled): `{ event:'cancelled', scan_job_id, succeeded, failed, removed_pending }`
 
@@ -116,6 +124,23 @@ the authoritative "all done" signal, not a callback count.
 - SSRF protection: rejects non-http(s) schemes and private IP ranges (`10.x`, `192.168.x`, `172.16–31.x`, `169.254.x`, `localhost`, IPv6 loopback)
 - Input validation: `categories` allowlist; `timeout` bounded 5,000–300,000ms; `crawl_limit` bounded 1–20
 - `SCANNER_SECRET` env var: when set, all inbound requests and outbound callbacks must carry `X-Scanner-Secret` header
+
+### S3 storage layout (`src/storage.ts`)
+
+Enabled when `S3_BUCKET` is set (else results + base64 screenshots are inlined — local-dev default).
+
+- `payloads/{scan_job_id}/{job.id}.json` — **private** result JSON; delivered as a presigned GET
+  URL (`S3_URL_TTL_SECONDS`, default 1h). Fetched once by the backend on callback receipt.
+- `screenshots/{scan_job_id}/{uuid}/{strategy}/{final.jpg|fullpage.webp|filmstrip-N.jpg}` —
+  **public** binary images; delivered as permanent direct S3 URLs (`S3_PUBLIC_BASE_URL` or the
+  derived `https://<bucket>.s3.<region>.amazonaws.com`). The random `{uuid}` makes URLs
+  non-enumerable. Uploaded by the worker via `offloadScreenshots()` before the payload upload;
+  per-strategy failures fall back to inline base64.
+
+Requires a **bucket policy granting anonymous `s3:GetObject` on `screenshots/*` only** — `payloads/`
+must stay private. Lifecycle rules: `payloads/` short (~1 day), `screenshots/` longer (e.g. 30 days,
+and never shorter than how long the backend keeps the scan's screenshot URLs — there is no re-sign
+fallback for public URLs).
 
 ### ESM/CJS note
 

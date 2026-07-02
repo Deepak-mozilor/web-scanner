@@ -105,12 +105,13 @@ export interface CategoryGroup {
 
 export interface FilmstripFrame {
   timing: number;
-  data: string;
+  data: string;   // inline: "data:image/...;base64,..."  |  s3: public https URL
 }
 
 export interface Screenshots {
-  final: string | null;
-  fullPage: string | null;
+  storage: 'inline' | 's3';   // 'inline' = base64 data URIs; 's3' = public https URLs
+  final: string | null;       // inline: data URI | s3: public URL | null
+  fullPage: string | null;    // inline: data URI | s3: public URL | null
   filmstrip: FilmstripFrame[];
 }
 
@@ -517,6 +518,7 @@ export function parseResults(result: RunnerResult, strategy: string, pageTitle =
   const fullPage = lhr.fullPageScreenshot;
 
   const screenshots: Screenshots = {
+    storage: 'inline',   // base64 here; the worker rewrites to 's3' after uploading
     final: (finalScreenshot?.details as { data?: string } | undefined)?.data ?? null,
     fullPage: fullPage?.screenshot?.data ?? null,
     filmstrip: ((filmstripAudit?.details as { items?: { timing: number; data: string }[] } | undefined)?.items ?? [])
