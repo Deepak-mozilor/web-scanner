@@ -306,15 +306,25 @@ const A11Y_AFFECTED: Record<string, string[]> = {
 // Which discipline typically owns the fix. Most audits are code fixes → "Development"
 // is the default; these audits map to "Design" (visual/styling) or "Content" (copy/media).
 const RESPONSIBILITY_OVERRIDES: Record<string, string> = {
+  // Design — visual / styling / spacing / colour
   'color-contrast': 'Design',
   'meta-viewport': 'Design',
   'target-size': 'Design',
+  'link-in-text-block': 'Design',   // links distinguished only by colour → styling fix
+  // Content — copy / media / alt text / headings / link text
   'image-alt': 'Content',
   'input-image-alt': 'Content',
   'object-alt': 'Content',
+  'svg-img-alt': 'Content',
+  'image-redundant-alt': 'Content',
   'video-caption': 'Content',
   'document-title': 'Content',
   'meta-description': 'Content',
+  'heading-order': 'Content',
+  'empty-heading': 'Content',
+  'identical-links-same-purpose': 'Content',
+  // Everything else (ARIA, keyboard, landmarks, focus, semantics, autocomplete,
+  // labels, tables, etc.) defaults to 'Development'.
 };
 
 function responsibilityFor(id: string): string {
