@@ -70,6 +70,8 @@ export interface PassedAudit {
   learnMoreUrl?: string;
   tags?: string[];       // WCAG tags from the static map (LHR has none on passed audits)
   level?: string;        // derived WCAG conformance level: "A" | "AA" | "AAA"
+  wcagCriterion?: string; // derived success criterion, e.g. "1.1.1"
+  wcagVersion?: string;  // derived WCAG version, e.g. "2.0"
 }
 
 // Counts across all scoreable audits for the page.
@@ -490,6 +492,8 @@ export function parseResults(result: RunnerResult, strategy: string, pageTitle =
       const learnMoreUrl = extractLearnMoreUrl(a.description ?? '');
       const tags = A11Y_WCAG_TAGS[a.id];              // LHR has no tags on passed audits
       const level = wcagLevel(tags);
+      const criterion = wcagCriterion(tags);
+      const version = wcagVersion(tags);
       return {
         id: a.id,
         title: a.title,
@@ -497,6 +501,8 @@ export function parseResults(result: RunnerResult, strategy: string, pageTitle =
         ...(learnMoreUrl && { learnMoreUrl }),
         ...(tags && { tags }),
         ...(level && { level }),
+        ...(criterion && { wcagCriterion: criterion }),
+        ...(version && { wcagVersion: version }),
       };
     });
 
