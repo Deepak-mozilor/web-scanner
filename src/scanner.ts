@@ -92,7 +92,7 @@ async function getBrowser(): Promise<Browser> {
       await sharedBrowser.close().catch(() => { /* already gone */ });
     }
     console.log('[scanner] launching Chrome');
-    sharedBrowser = await puppeteer.launch({ headless: 'shell', args: PUPPETEER_ARGS });
+    sharedBrowser = await puppeteer.launch({ headless: true, args: PUPPETEER_ARGS });
     scansOnBrowser = 0;
   }
 

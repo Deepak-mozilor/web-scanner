@@ -9,3 +9,6 @@ scripts/
 
 # Raw Lighthouse dumps from manual testing
 raw-lhr*.json
+
+# Local scan result dumps for inspection
+test.json
