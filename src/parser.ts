@@ -100,10 +100,9 @@ export interface NotApplicableAudit {
 export interface CategoryGroup {
   score: number | null;
   title: string;
-  critical: AuditItem[];               // score === 0, weight > 0 (affects the score)
-  nonCritical: AuditItem[];            // 0 < score < 0.9, weight > 0
+  critical: AuditItem[];               // score === 0
+  nonCritical: AuditItem[];            // 0 < score < 0.9
   passed: PassedAudit[];               // score ≥ 0.9
-  informational: AuditItem[];          // failed but weight 0 — doesn't affect the score (e.g. valid-source-maps)
   needsReview: ManualAudit[];          // scoreDisplayMode === 'manual'
   notApplicable: NotApplicableAudit[]; // scoreDisplayMode === 'notApplicable'
 }
@@ -533,20 +532,14 @@ export function parseResults(result: RunnerResult, strategy: string, pageTitle =
     const catCritical: AuditItem[] = [];
     const catNonCritical: AuditItem[] = [];
     const catPassed: PassedAudit[] = [];
-    const catInformational: AuditItem[] = [];
     const catNeedsReview: ManualAudit[] = [];
     const catNotApplicable: NotApplicableAudit[] = [];
 
-    // Route each audit ref into the right bucket (first match wins). Weight-0 audits
-    // don't affect the category score, so a failing one goes to `informational`
-    // rather than critical/nonCritical (e.g. valid-source-maps on a 100 score).
+    // Route each audit ref into the right bucket (first match wins).
     for (const ref of cat.auditRefs) {
-      const informational = ref.weight === 0;
-      if (criticalById.has(ref.id)) {
-        (informational ? catInformational : catCritical).push(criticalById.get(ref.id)!);
-      } else if (nonCriticalById.has(ref.id)) {
-        (informational ? catInformational : catNonCritical).push(nonCriticalById.get(ref.id)!);
-      } else if (passedById.has(ref.id)) catPassed.push(passedById.get(ref.id)!);
+      if (criticalById.has(ref.id)) catCritical.push(criticalById.get(ref.id)!);
+      else if (nonCriticalById.has(ref.id)) catNonCritical.push(nonCriticalById.get(ref.id)!);
+      else if (passedById.has(ref.id)) catPassed.push(passedById.get(ref.id)!);
       else if (manualById.has(ref.id)) catNeedsReview.push(manualById.get(ref.id)!);
       else if (naById.has(ref.id)) catNotApplicable.push(naById.get(ref.id)!);
     }
@@ -557,7 +550,6 @@ export function parseResults(result: RunnerResult, strategy: string, pageTitle =
       critical: catCritical,
       nonCritical: catNonCritical.sort((a, b) => (a.score ?? 0) - (b.score ?? 0)),
       passed: catPassed,
-      informational: catInformational,
       needsReview: catNeedsReview,
       notApplicable: catNotApplicable,
     };
