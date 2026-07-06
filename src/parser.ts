@@ -100,8 +100,8 @@ export interface NotApplicableAudit {
 export interface CategoryGroup {
   score: number | null;
   title: string;
-  critical: AuditItem[];               // score ≤ 0.1, weight > 0 (affects the score)
-  nonCritical: AuditItem[];            // 0.1 < score < 0.9, weight > 0
+  critical: AuditItem[];               // score === 0, weight > 0 (affects the score)
+  nonCritical: AuditItem[];            // 0 < score < 0.9, weight > 0
   passed: PassedAudit[];               // score ≥ 0.9
   informational: AuditItem[];          // failed but weight 0 — doesn't affect the score (e.g. valid-source-maps)
   needsReview: ManualAudit[];          // scoreDisplayMode === 'manual'
@@ -477,13 +477,13 @@ export function parseResults(result: RunnerResult, strategy: string, pageTitle =
       a.score != null
   );
 
-  // 5. Bucket scoreable audits by severity: ≤0.1 critical, 0.1–0.9 needs work, ≥0.9 passed.
+  // 5. Bucket scoreable audits by severity using the 0 / <0.9 / ≥0.9 thresholds.
   const critical: AuditItem[] = scoreable
-    .filter((a) => (a.score as number) <= 0.1)        // 0–10% → critical
+    .filter((a) => (a.score as number) === 0)        // outright failures
     .map(toAuditItem);
 
   const nonCritical: AuditItem[] = scoreable
-    .filter((a) => (a.score as number) > 0.1 && (a.score as number) < 0.9)  // 10–90% → needs work
+    .filter((a) => (a.score as number) > 0 && (a.score as number) < 0.9)  // needs work
     .map(toAuditItem)
     .sort((a, b) => (a.score ?? 0) - (b.score ?? 0)); // worst (lowest score) first
 
