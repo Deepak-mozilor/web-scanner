@@ -60,6 +60,32 @@ const DESKTOP_SCREEN = {
   disabled: false,
 };
 
+// Lighthouse's default throttling presets. We only ever override cpuSlowdownMultiplier,
+// so we start from these to keep each form factor's network throttling intact.
+const MOBILE_THROTTLING = {
+  rttMs: 150,
+  throughputKbps: 1638.4,
+  requestLatencyMs: 562.5,
+  downloadThroughputKbps: 1474.5,
+  uploadThroughputKbps: 675,
+  cpuSlowdownMultiplier: 4,
+};
+const DESKTOP_THROTTLING = {
+  rttMs: 40,
+  throughputKbps: 10240,
+  requestLatencyMs: 0,
+  downloadThroughputKbps: 0,
+  uploadThroughputKbps: 0,
+  cpuSlowdownMultiplier: 1,
+};
+
+// Optional CPU-throttling calibration. Set CPU_SLOWDOWN_MULTIPLIER to normalise
+// the effective CPU speed across hardware (multiplier = hostBenchmarkIndex / target).
+// Unset → Lighthouse's defaults (4× mobile, 1× desktop).
+const CPU_SLOWDOWN_MULTIPLIER = process.env.CPU_SLOWDOWN_MULTIPLIER
+  ? parseFloat(process.env.CPU_SLOWDOWN_MULTIPLIER)
+  : undefined;
+
 export const PUPPETEER_ARGS = [
   '--no-sandbox',
   '--disable-dev-shm-usage',
@@ -158,6 +184,14 @@ export async function runScan(options: ScanOptions): Promise<ScanResult> {
       onlyCategories: categories,
       formFactor: strategy,
       ...(strategy === 'desktop' && { screenEmulation: DESKTOP_SCREEN }),
+      // Always apply the form factor's throttling preset. Lighthouse's DEFAULT
+      // throttling is mobile (slow 4G + 4× CPU), so a 'desktop' formFactor without
+      // this silently gets mobile throttling — tanking desktop scores. Optionally
+      // override just the CPU multiplier for calibration.
+      throttling: {
+        ...(strategy === 'desktop' ? DESKTOP_THROTTLING : MOBILE_THROTTLING),
+        ...(CPU_SLOWDOWN_MULTIPLIER != null && { cpuSlowdownMultiplier: CPU_SLOWDOWN_MULTIPLIER }),
+      },
     };
 
     const timeoutPromise = new Promise<never>((_, reject) =>
@@ -170,7 +204,8 @@ export async function runScan(options: ScanOptions): Promise<ScanResult> {
       if (!result) throw new ScanError('Lighthouse returned no result', 'NO_RESULT', 500);
       // Capture the page <title> while the page is still open (empty string if unavailable).
       const pageTitle = await page.title().catch(() => '');
-      console.log(`[scanner] Lighthouse finished`);
+      const benchmarkIndex = (result.lhr as { environment?: { benchmarkIndex?: number } })?.environment?.benchmarkIndex;
+      console.log(`[scanner] Lighthouse finished (benchmarkIndex=${benchmarkIndex ?? '?'}, cpuMultiplier=${CPU_SLOWDOWN_MULTIPLIER ?? 'default'})`);
       return { result, pageTitle };
     } catch (err) {
       if (err instanceof ScanError) throw err;
