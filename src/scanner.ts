@@ -64,6 +64,10 @@ export const PUPPETEER_ARGS = [
   '--no-sandbox',
   '--disable-dev-shm-usage',
   '--enable-features=NetworkService,NetworkServiceInProcess',
+  // Allow third-party cookies so Lighthouse's third-party-cookies audit can
+  // observe them (Chromium blocks them by default). May be a no-op on newer
+  // Chromium as Chrome deprecates 3P cookies.
+  '--disable-features=BlockThirdPartyCookies',
 ];
 
 // Lighthouse uses the global performance namespace (performance.mark / clearMarks).
