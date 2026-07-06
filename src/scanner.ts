@@ -91,9 +91,16 @@ export const PUPPETEER_ARGS = [
   '--disable-dev-shm-usage',
   '--enable-features=NetworkService,NetworkServiceInProcess',
   // Allow third-party cookies so Lighthouse's third-party-cookies audit can
-  // observe them (Chromium blocks them by default). May be a no-op on newer
-  // Chromium as Chrome deprecates 3P cookies.
-  '--disable-features=BlockThirdPartyCookies',
+  // observe them (Chromium blocks them by default). The controlling feature
+  // name changed across Chromium versions, so disable all of them:
+  //   BlockThirdPartyCookies        — older builds
+  //   TrackingProtection3pcd        — Chrome's 3P-cookie-deprecation rollout (120+)
+  //   ThirdPartyStoragePartitioning — partitions 3P storage even when not blocked
+  // NOTE: which feature name applies depends on the Chromium build — the Docker
+  // image runs Debian's chromium, local dev runs Chrome for Testing.
+  // Chromium only honors the LAST occurrence of a repeated switch, so never add
+  // a second --enable-features/--disable-features entry — merge into the ones above.
+  '--disable-features=BlockThirdPartyCookies,TrackingProtection3pcd,ThirdPartyStoragePartitioning',
 ];
 
 // Lighthouse uses the global performance namespace (performance.mark / clearMarks).
