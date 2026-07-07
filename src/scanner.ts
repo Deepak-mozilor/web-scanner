@@ -60,8 +60,8 @@ const DESKTOP_SCREEN = {
   disabled: false,
 };
 
-// Lighthouse's default throttling presets. We only ever override cpuSlowdownMultiplier,
-// so we start from these to keep each form factor's network throttling intact.
+// Lighthouse's default throttling presets, applied per form factor to keep each
+// one's network + CPU throttling intact.
 const MOBILE_THROTTLING = {
   rttMs: 150,
   throughputKbps: 1638.4,
@@ -79,28 +79,14 @@ const DESKTOP_THROTTLING = {
   cpuSlowdownMultiplier: 1,
 };
 
-// Optional CPU-throttling calibration. Set CPU_SLOWDOWN_MULTIPLIER to normalise
-// the effective CPU speed across hardware (multiplier = hostBenchmarkIndex / target).
-// Unset → Lighthouse's defaults (4× mobile, 1× desktop).
-const CPU_SLOWDOWN_MULTIPLIER = process.env.CPU_SLOWDOWN_MULTIPLIER
-  ? parseFloat(process.env.CPU_SLOWDOWN_MULTIPLIER)
-  : undefined;
-
 export const PUPPETEER_ARGS = [
   '--no-sandbox',
   '--disable-dev-shm-usage',
   '--enable-features=NetworkService,NetworkServiceInProcess',
-  // Allow third-party cookies so Lighthouse's third-party-cookies audit can
-  // observe them (Chromium blocks them by default). The controlling feature
-  // name changed across Chromium versions, so disable all of them:
-  //   BlockThirdPartyCookies        — older builds
-  //   TrackingProtection3pcd        — Chrome's 3P-cookie-deprecation rollout (120+)
-  //   ThirdPartyStoragePartitioning — partitions 3P storage even when not blocked
-  // NOTE: which feature name applies depends on the Chromium build — the Docker
-  // image runs Debian's chromium, local dev runs Chrome for Testing.
-  // Chromium only honors the LAST occurrence of a repeated switch, so never add
-  // a second --enable-features/--disable-features entry — merge into the ones above.
-  '--disable-features=BlockThirdPartyCookies,TrackingProtection3pcd,ThirdPartyStoragePartitioning',
+  // Force Chromium to test the third-party cookie deprecation.
+  // This triggers the exact DevTools Protocol warnings and exclusions
+  // that Lighthouse's third-party-cookies audit searches for.
+  '--test-third-party-cookie-phaseout'
 ];
 
 // Lighthouse uses the global performance namespace (performance.mark / clearMarks).
@@ -193,12 +179,8 @@ export async function runScan(options: ScanOptions): Promise<ScanResult> {
       ...(strategy === 'desktop' && { screenEmulation: DESKTOP_SCREEN }),
       // Always apply the form factor's throttling preset. Lighthouse's DEFAULT
       // throttling is mobile (slow 4G + 4× CPU), so a 'desktop' formFactor without
-      // this silently gets mobile throttling — tanking desktop scores. Optionally
-      // override just the CPU multiplier for calibration.
-      throttling: {
-        ...(strategy === 'desktop' ? DESKTOP_THROTTLING : MOBILE_THROTTLING),
-        ...(CPU_SLOWDOWN_MULTIPLIER != null && { cpuSlowdownMultiplier: CPU_SLOWDOWN_MULTIPLIER }),
-      },
+      // this silently gets mobile throttling — tanking desktop scores.
+      throttling: strategy === 'desktop' ? DESKTOP_THROTTLING : MOBILE_THROTTLING,
     };
 
     const timeoutPromise = new Promise<never>((_, reject) =>
@@ -212,7 +194,7 @@ export async function runScan(options: ScanOptions): Promise<ScanResult> {
       // Capture the page <title> while the page is still open (empty string if unavailable).
       const pageTitle = await page.title().catch(() => '');
       const benchmarkIndex = (result.lhr as { environment?: { benchmarkIndex?: number } })?.environment?.benchmarkIndex;
-      console.log(`[scanner] Lighthouse finished (benchmarkIndex=${benchmarkIndex ?? '?'}, cpuMultiplier=${CPU_SLOWDOWN_MULTIPLIER ?? 'default'})`);
+      console.log(`[scanner] Lighthouse finished (benchmarkIndex=${benchmarkIndex ?? '?'})`);
       return { result, pageTitle };
     } catch (err) {
       if (err instanceof ScanError) throw err;
