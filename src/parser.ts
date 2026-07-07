@@ -40,6 +40,7 @@ export interface AuditItem {
   wcagVersion?: string;  // derived WCAG version that introduced it, e.g. "2.0"
   affects?: string[];    // user groups impacted, e.g. ["blind", "low vision"] (a11y audits only)
   responsibility?: string; // who typically fixes it: "Development" | "Design" | "Content"
+  weight?: number;       // this audit's weight in its category score (0 = diagnostic-only, no score impact)
 }
 
 // One row of a Lighthouse "checklist"-style audit (used by insights).
@@ -72,6 +73,7 @@ export interface PassedAudit {
   level?: string;        // derived WCAG conformance level: "A" | "AA" | "AAA"
   wcagCriterion?: string; // derived success criterion, e.g. "1.1.1"
   wcagVersion?: string;  // derived WCAG version, e.g. "2.0"
+  weight?: number;       // this audit's weight in its category score (0 = diagnostic-only, no score impact)
 }
 
 // Counts across all scoreable audits for the page.
@@ -535,11 +537,13 @@ export function parseResults(result: RunnerResult, strategy: string, pageTitle =
     const catNeedsReview: ManualAudit[] = [];
     const catNotApplicable: NotApplicableAudit[] = [];
 
-    // Route each audit ref into the right bucket (first match wins).
+    // Route each audit ref into the right bucket (first match wins). Attach the
+    // audit's weight (from the category's auditRef) — it's category-specific, so
+    // we copy the shared item rather than mutate it.
     for (const ref of cat.auditRefs) {
-      if (criticalById.has(ref.id)) catCritical.push(criticalById.get(ref.id)!);
-      else if (nonCriticalById.has(ref.id)) catNonCritical.push(nonCriticalById.get(ref.id)!);
-      else if (passedById.has(ref.id)) catPassed.push(passedById.get(ref.id)!);
+      if (criticalById.has(ref.id)) catCritical.push({ ...criticalById.get(ref.id)!, weight: ref.weight });
+      else if (nonCriticalById.has(ref.id)) catNonCritical.push({ ...nonCriticalById.get(ref.id)!, weight: ref.weight });
+      else if (passedById.has(ref.id)) catPassed.push({ ...passedById.get(ref.id)!, weight: ref.weight });
       else if (manualById.has(ref.id)) catNeedsReview.push(manualById.get(ref.id)!);
       else if (naById.has(ref.id)) catNotApplicable.push(naById.get(ref.id)!);
     }
