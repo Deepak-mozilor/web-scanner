@@ -271,12 +271,12 @@ export function startWorker(): Worker<AnyJobData, void, 'crawl' | 'scan'> {
   console.log('[worker] starting');
 
   const worker = new Worker<AnyJobData, void, 'crawl' | 'scan'>(QUEUE_NAME, async (job) => {
-    if (job.name === 'crawl') return processCrawlJob(job as Job<CrawlJobData>);
-    if (job.name === 'scan') return processScanJob(job as Job<ScanJobData>);
+    if (job.name === 'crawl') return await processCrawlJob(job as Job<CrawlJobData>);
+    if (job.name === 'scan') return await processScanJob(job as Job<ScanJobData>);
     throw new UnrecoverableError(`Unknown job type: ${job.name}`);
   }, {
     connection: createRedisConnection(),
-    concurrency: parseInt(process.env.WORKER_CONCURRENCY ?? '1', 10),
+    concurrency: parseInt(process.env.WORKER_CONCURRENCY ?? '2', 10),
     lockDuration: 300_000,
     lockRenewTime: 100_000,
   });

@@ -1,4 +1,8 @@
-import puppeteer, { Browser } from 'puppeteer';
+import { fork } from 'child_process';
+import { randomUUID } from 'crypto';
+import { promises as fs } from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 import type { RunnerResult } from 'lighthouse';
 
 // A single concrete strategy a Lighthouse run uses.
@@ -47,8 +51,8 @@ export interface ScanOptions {
   strategy?: Strategy;
   categories?: string[];
   timeout?: number;
-  // Checked after the Lighthouse mutex is acquired, just before Chrome launches.
-  // Lets a cancelled job bail out instead of starting a scan it will throw away.
+  // Checked before the child process is forked. Lets a cancelled job bail out
+  // instead of spending the cost of a scan it will throw away.
   shouldCancel?: () => boolean | Promise<boolean>;
 }
 
@@ -86,50 +90,29 @@ export const PUPPETEER_ARGS = [
   // Force Chromium to test the third-party cookie deprecation.
   // This triggers the exact DevTools Protocol warnings and exclusions
   // that Lighthouse's third-party-cookies audit searches for.
-  '--test-third-party-cookie-phaseout'
+  '--test-third-party-cookie-phaseout',
 ];
 
-// Lighthouse uses the global performance namespace (performance.mark / clearMarks).
-// Running two Lighthouse instances concurrently in the same Node process causes
-// "performance mark has not been set" errors. This mutex ensures only one scan
-// runs at a time across all jobs.
-let lighthouseQueue: Promise<void> = Promise.resolve();
-
-// Shared browser reused across scans to avoid relaunching Chrome for every page.
-// Two safeguards keep it healthy:
-//   1. Recycle: after MAX_SCANS_PER_BROWSER scans, close + relaunch to bound memory.
-//   2. Crash recovery: if the browser died, relaunch on next use (one scan fails, rest recover).
-// Safe because getBrowser() is only ever called inside the Lighthouse mutex — one scan
-// touches the browser at a time, so there's no concurrent access.
-let sharedBrowser: Browser | null = null;
-let scansOnBrowser = 0;
-const MAX_SCANS_PER_BROWSER = parseInt(process.env.MAX_SCANS_PER_BROWSER ?? '10', 10);
-
-async function getBrowser(): Promise<Browser> {
-  const dead = sharedBrowser != null && !sharedBrowser.connected;
-  const stale = sharedBrowser != null && scansOnBrowser >= MAX_SCANS_PER_BROWSER;
-
-  if (!sharedBrowser || dead || stale) {
-    if (sharedBrowser) {
-      console.log(`[scanner] recycling browser (scans=${scansOnBrowser}, dead=${dead})`);
-      await sharedBrowser.close().catch(() => { /* already gone */ });
-    }
-    console.log('[scanner] launching Chrome');
-    sharedBrowser = await puppeteer.launch({ headless: true, args: PUPPETEER_ARGS });
-    scansOnBrowser = 0;
-  }
-
-  scansOnBrowser++;
-  return sharedBrowser;
+// The Lighthouse flags for a given form factor. Shared with the child runner
+// (lighthouse-runner.ts) so the flag logic lives in exactly one place.
+export function lighthouseFlags(strategy: Strategy, categories: string[]) {
+  return {
+    output: 'json' as const,
+    logLevel: 'error' as const,
+    onlyCategories: categories,
+    formFactor: strategy,
+    ...(strategy === 'desktop' && { screenEmulation: DESKTOP_SCREEN }),
+    // Always apply the form factor's throttling preset. Lighthouse's DEFAULT
+    // throttling is mobile (slow 4G + 4× CPU), so a 'desktop' formFactor without
+    // this silently gets mobile throttling — tanking desktop scores.
+    throttling: strategy === 'desktop' ? DESKTOP_THROTTLING : MOBILE_THROTTLING,
+  };
 }
 
-// Close the shared browser on process shutdown so Chrome doesn't linger.
+// No shared browser to close — each scan forks its own process which launches and
+// closes its own Chrome. Kept as a no-op so worker.ts's shutdown import resolves.
 export async function closeSharedBrowser(): Promise<void> {
-  if (sharedBrowser) {
-    await sharedBrowser.close().catch(() => { /* already gone */ });
-    sharedBrowser = null;
-    scansOnBrowser = 0;
-  }
+  /* nothing to close — Chrome is owned by the per-scan child process */
 }
 
 export interface ScanResult {
@@ -137,6 +120,17 @@ export interface ScanResult {
   pageTitle: string;    // the audited page's <title>, captured via Puppeteer
 }
 
+// What the child runner writes to its output file.
+type RunnerOutput =
+  | { ok: true; lhr: RunnerResult['lhr']; pageTitle: string }
+  | { ok: false; code: string | null; message: string };
+
+// Each scan runs Lighthouse in its OWN Node process (a forked child). Lighthouse
+// uses the process-global `performance` namespace, so two runs in one process
+// collide ("performance mark has not been set"). Forking gives every run its own
+// global state, making concurrent scans safe without a mutex — this is how tools
+// like unlighthouse parallelise. The child launches + closes its own Chrome and
+// writes the result to a temp file, which we read back here.
 export async function runScan(options: ScanOptions): Promise<ScanResult> {
   const {
     url,
@@ -146,75 +140,57 @@ export async function runScan(options: ScanOptions): Promise<ScanResult> {
     shouldCancel,
   } = options;
 
-  // Wait for any in-flight Lighthouse scan to finish before starting this one
-  let release!: () => void;
-  const previous = lighthouseQueue;
-  lighthouseQueue = new Promise<void>(resolve => (release = resolve));
-  await previous;
+  // Bail before forking if the job was already cancelled.
+  if (shouldCancel && (await shouldCancel())) {
+    throw new ScanError('Scan cancelled', 'CANCELLED', 499);
+  }
 
+  const spec = { url, strategy, categories };
+  const outPath = path.join(os.tmpdir(), `lh-${randomUUID()}.json`);
+
+  // In dev (ts-node) __filename is a .ts file → run the .ts runner via ts-node's
+  // register hook. In prod it's the compiled .js → run it with plain node.
+  const isTs = __filename.endsWith('.ts');
+  const runnerPath = path.join(__dirname, isTs ? 'lighthouse-runner.ts' : 'lighthouse-runner.js');
+
+  console.log(`[scanner] forking Lighthouse runner for ${url} (${strategy})`);
+  const child = fork(runnerPath, [JSON.stringify(spec), outPath], {
+    execArgv: isTs ? ['-r', 'ts-node/register'] : [],
+  });
+
+  let timer: NodeJS.Timeout | undefined;
   try {
-    // The job may have been cancelled while parked behind the mutex. Bail before
-    // spending the cost of launching Chrome and running a scan we'd discard.
-    if (shouldCancel && (await shouldCancel())) {
-      throw new ScanError('Scan cancelled', 'CANCELLED', 499);
+    const exitCode = await new Promise<number>((resolve, reject) => {
+      // Whole-run timeout: kill the child (and its Chrome) if it overruns.
+      timer = setTimeout(() => {
+        child.kill('SIGKILL');
+        reject(new ScanError(`Scan timed out after ${timeout}ms`, 'TIMEOUT', 504));
+      }, timeout);
+      child.on('exit', (code) => resolve(code ?? 0));
+      child.on('error', (err) => reject(err));
+    });
+
+    const raw = await fs.readFile(outPath, 'utf8').catch(() => null);
+    if (!raw) {
+      throw new ScanError(`Lighthouse runner exited (code=${exitCode}) with no result`, 'RUNNER_FAILED', 500);
     }
 
-    // Dynamic import because lighthouse 10+ is ESM-only
-    const { default: lighthouse } = await import('lighthouse');
-
-    // Reuse the shared browser (relaunched periodically / on crash by getBrowser).
-    const browser = await getBrowser();
-    // Each scan runs in its own isolated context (separate cookies/cache/storage),
-    // so reusing the browser doesn't bleed state between pages. Lighthouse audits
-    // this Puppeteer-controlled page via the page-based API (4th argument).
-    const context = await browser.createBrowserContext();
-    const page = await context.newPage();
-    console.log(`[scanner] Chrome ready (scan ${scansOnBrowser}/${MAX_SCANS_PER_BROWSER})`);
-
-    const flags = {
-      output: 'json' as const,
-      logLevel: 'error' as const,
-      onlyCategories: categories,
-      formFactor: strategy,
-      ...(strategy === 'desktop' && { screenEmulation: DESKTOP_SCREEN }),
-      // Always apply the form factor's throttling preset. Lighthouse's DEFAULT
-      // throttling is mobile (slow 4G + 4× CPU), so a 'desktop' formFactor without
-      // this silently gets mobile throttling — tanking desktop scores.
-      throttling: strategy === 'desktop' ? DESKTOP_THROTTLING : MOBILE_THROTTLING,
-    };
-
-    const timeoutPromise = new Promise<never>((_, reject) =>
-      setTimeout(() => reject(new Error(`Scan timed out after ${timeout}ms`)), timeout)
-    );
-
-    try {
-      console.log(`[scanner] running Lighthouse on ${url}`);
-      const result = await Promise.race([lighthouse(url, flags, undefined, page), timeoutPromise]);
-      if (!result) throw new ScanError('Lighthouse returned no result', 'NO_RESULT', 500);
-      // Capture the page <title> while the page is still open (empty string if unavailable).
-      const pageTitle = await page.title().catch(() => '');
-      const benchmarkIndex = (result.lhr as { environment?: { benchmarkIndex?: number } })?.environment?.benchmarkIndex;
-      console.log(`[scanner] Lighthouse finished (benchmarkIndex=${benchmarkIndex ?? '?'})`);
-      return { result, pageTitle };
-    } catch (err) {
-      if (err instanceof ScanError) throw err;
-
-      const message = err instanceof Error ? err.message : String(err);
-      const lhCode = (err as { code?: string }).code;
-
-      if (message.includes('timed out')) {
-        throw new ScanError(`Scan timed out after ${timeout}ms`, 'TIMEOUT', 504);
+    const out = JSON.parse(raw) as RunnerOutput;
+    if (!out.ok) {
+      if (out.code && CLIENT_ERROR_CODES.has(out.code)) {
+        throw new ScanError(LH_ERROR_MESSAGES[out.code] ?? 'URL could not be loaded', out.code, 400);
       }
-      if (lhCode && CLIENT_ERROR_CODES.has(lhCode)) {
-        throw new ScanError(LH_ERROR_MESSAGES[lhCode] ?? 'URL could not be loaded', lhCode, 400);
-      }
-      throw err;
-    } finally {
-      // Close only this scan's context — the browser stays alive for the next scan.
-      await context.close().catch(() => { /* browser may have crashed; getBrowser relaunches */ });
-      console.log(`[scanner] scan context closed`);
+      throw new ScanError(out.message || 'Lighthouse failed', out.code ?? 'CHROME_ERROR', 500);
     }
+
+    const benchmarkIndex = (out.lhr as { environment?: { benchmarkIndex?: number } })?.environment?.benchmarkIndex;
+    console.log(`[scanner] Lighthouse finished (benchmarkIndex=${benchmarkIndex ?? '?'})`);
+    // parseResults only reads result.lhr, so wrapping the lhr is sufficient.
+    return { result: { lhr: out.lhr } as RunnerResult, pageTitle: out.pageTitle ?? '' };
   } finally {
-    release();
+    if (timer) clearTimeout(timer);
+    // Ensure the child is dead even on an unexpected path.
+    if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+    await fs.unlink(outPath).catch(() => { /* never written / already gone */ });
   }
 }
