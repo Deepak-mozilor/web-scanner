@@ -195,6 +195,30 @@ export async function runScan(options: ScanOptions): Promise<ScanResult> {
       const pageTitle = await page.title().catch(() => '');
       const benchmarkIndex = (result.lhr as { environment?: { benchmarkIndex?: number } })?.environment?.benchmarkIndex;
       console.log(`[scanner] Lighthouse finished (benchmarkIndex=${benchmarkIndex ?? '?'})`);
+
+      // Diagnostic: a null category score means an audit in that category errored
+      // (Lighthouse can't compute the weighted average). Log which audit(s) failed
+      // so null scores are explainable from the worker logs (esp. on EC2, where the
+      // Chromium build can differ from local dev).
+      const lhrDiag = result.lhr as {
+        runtimeError?: { code?: string; message?: string };
+        categories?: Record<string, { score: number | null }>;
+        audits?: Record<string, { scoreDisplayMode?: string; errorMessage?: string }>;
+      };
+      const nullCats = Object.entries(lhrDiag.categories ?? {})
+        .filter(([, c]) => c.score == null)
+        .map(([k]) => k);
+      if (nullCats.length) {
+        const errored = Object.entries(lhrDiag.audits ?? {})
+          .filter(([, a]) => a.scoreDisplayMode === 'error' || a.errorMessage)
+          .map(([id, a]) => `${id}: ${a.errorMessage ?? 'error'}`);
+        console.warn(
+          `[scanner] null category score(s) [${nullCats.join(', ')}] on ${url} (${strategy}) — ` +
+          `errored audits: ${errored.join(' | ') || 'none found'}` +
+          (lhrDiag.runtimeError ? ` — runtimeError: ${lhrDiag.runtimeError.code} ${lhrDiag.runtimeError.message}` : ''),
+        );
+      }
+
       return { result, pageTitle };
     } catch (err) {
       if (err instanceof ScanError) throw err;
