@@ -22,11 +22,20 @@ services:
     build: .
     restart: unless-stopped
     command: node dist/worker.js
+    # Run multiple worker CONTAINERS for true parallelism. Each container is its
+    # own process (own Chrome, own global `performance` namespace), so N replicas
+    # run N scans at once safely — they all pull from the shared Redis queue,
+    # which load-balances jobs across them. Prefer this over raising
+    # WORKER_CONCURRENCY: on the mutex model, in-process concurrency serialises
+    # anyway, so scaling replicas is what actually adds parallelism.
+    # Override the count at deploy time: WORKER_REPLICAS=3 docker compose up -d
+    deploy:
+      replicas: ${WORKER_REPLICAS:-1}
     environment:
       REDIS_URL: redis://redis:6379
       SCANNER_SECRET: ${SCANNER_SECRET}
-      # 1 = strictly ordered callbacks (one job fully finishes before the next).
-      # The Lighthouse mutex already serialises scans, so this costs little.
+      # Keep at 1 per container — the Lighthouse mutex serialises scans within a
+      # process, so parallelism comes from replicas (above), not this value.
       WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-1}
       # S3 offloading. Credentials come from the EC2 instance role (no keys here).
       # Requires the instance metadata hop limit to be >= 2 so the container can
