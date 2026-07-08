@@ -57,6 +57,19 @@ Both must run simultaneously for the system to function.
 
 `scanner.ts` chains all Lighthouse runs through a single `lighthouseQueue` promise so only one Chrome instance runs at a time. This is required because Lighthouse uses the global `performance` namespace and crashes when two instances run concurrently in the same process. The `shouldCancel` hook is checked immediately after acquiring the mutex, before Chrome launches.
 
+### Scaling (multiple worker containers)
+
+Because the mutex serialises Lighthouse *within* a process, in-process concurrency (`WORKER_CONCURRENCY`) does not add real parallelism — **raising the worker container count does.** Each container is its own process (own Chrome, own `performance` namespace) and pulls from the shared Redis queue, which load-balances jobs across them, so N containers run N scans in parallel, crash-free.
+
+Set the replica count via `WORKER_REPLICAS` (wired to `deploy.replicas` on the `worker` service in `docker-compose.yml`):
+
+```bash
+WORKER_REPLICAS=2 docker compose up -d      # or set WORKER_REPLICAS in .env
+docker compose up -d --scale worker=2       # runtime override (Compose v2)
+```
+
+Keep `WORKER_CONCURRENCY=1` per container and scale replicas instead. **Size `WORKER_REPLICAS` to roughly `vCPUs − 1`** on a non-burstable instance — each actively-scanning worker wants a dedicated core, or performance scores degrade from CPU contention. On a 2-vCPU/burstable box (e.g. m7i-flex.large), keep it at 1. `deploy.replicas` requires Docker Compose v2; on v1 use `--scale`.
+
 ### Redis keys used at runtime
 
 | Key | Purpose |
