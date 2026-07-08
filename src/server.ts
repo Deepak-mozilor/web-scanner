@@ -12,7 +12,7 @@ app.use(express.json({ limit: '10mb' }));
 
 // Rate limiter applied only to scan creation, not to cancel (cancels must always get through).
 const scanLimiter: express.RequestHandler = rateLimit({
-  windowMs: 60_000,
+  windowMs: 120_000,
   max: 20,
   standardHeaders: true,
   legacyHeaders: false,
@@ -33,7 +33,7 @@ app.get('/health', (_req: Request, res: Response) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
-const ALLOWED_CATEGORIES = new Set(['performance', 'accessibility', 'best-practices', 'seo', 'pwa']);
+const ALLOWED_CATEGORIES = new Set(['performance', 'accessibility', 'best-practices', 'seo']);
 const PRIVATE_IP_RE =
   /^(127\.|10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.|169\.254\.|0\.0\.0\.0|::1$|fc00:|fe80:)/i;
 
@@ -94,7 +94,7 @@ app.post('/scan', scanLimiter, async (req: Request<object, object, ScanBody>, re
     callback_url,
     strategy = 'both',
     categories = ['performance', 'accessibility', 'best-practices', 'seo'],
-    timeout = 60_000,
+    timeout = 120_000,
     crawl_limit = 5,
   } = req.body;
 

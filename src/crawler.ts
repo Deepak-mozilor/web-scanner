@@ -84,8 +84,15 @@ export async function crawlUrls(rootUrl: string, limit = 5): Promise<string[]> {
   try {
     const page = await browser.newPage();
 
-    const response = await page.goto(rootUrl, { waitUntil: 'networkidle2', timeout: 15_000 });
+    // 'domcontentloaded' fires once the HTML is parsed — it does NOT wait for
+    // network silence, so sites that never go idle (analytics, long-polling,
+    // websockets) no longer time out the crawl.
+    const response = await page.goto(rootUrl, { waitUntil: 'domcontentloaded', timeout: 15_000 });
     if (!response || !response.ok()) return results;
+
+    // domcontentloaded can fire before JS-rendered nav links exist, so give the
+    // page a brief moment for anchors to appear (never throws if none show up).
+    await page.waitForSelector('a[href]', { timeout: 3_000 }).catch(() => { /* no anchors yet — proceed anyway */ });
 
     // Phase 1: links from <nav> and <header> — querySelectorAll handles nested elements correctly
     const navHrefs = await page.evaluate(() =>

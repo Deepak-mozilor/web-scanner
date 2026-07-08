@@ -142,7 +142,7 @@ export async function runScan(options: ScanOptions): Promise<ScanResult> {
     url,
     strategy = 'desktop',
     categories = ['performance', 'accessibility', 'best-practices', 'seo'],
-    timeout = 60_000,
+    timeout = 120_000,
     shouldCancel,
   } = options;
 
