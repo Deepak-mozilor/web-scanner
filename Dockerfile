@@ -8,6 +8,10 @@ RUN apt-get update && apt-get install -y \
 WORKDIR /app
 
 COPY package*.json ./
+# patches/ must be present BEFORE npm ci, because npm ci runs the postinstall
+# (patch-package), which applies patches/lighthouse+13.4.0.patch — raising Chrome's
+# network buffer so heavy pages don't evict the main document (charset audit fix).
+COPY patches ./patches
 # Skip Puppeteer's bundled Chrome download — we use system Chromium installed above
 RUN PUPPETEER_SKIP_DOWNLOAD=true npm ci
 
