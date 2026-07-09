@@ -47,8 +47,8 @@ Both must run simultaneously for the system to function.
 |---|---|
 | `src/server.ts` | Express routes: `POST /scan`, `POST /scan/:id/cancel`, `GET /health` |
 | `src/queue.ts` | BullMQ queue + Redis connection factory; `CrawlJobData` / `ScanJobData` types |
-| `src/crawler.ts` | Puppeteer-based link extractor; two-phase: nav/header links first, then all `<a>` |
-| `src/scanner.ts` | Runs Lighthouse via Puppeteer; global mutex serialises concurrent scans |
+| `src/crawler.ts` | Puppeteer-based link extractor; navigates with `domcontentloaded` (+ short `a[href]` settle) so never-idle sites don't time out; two-phase: nav/header links first, then all `<a>` |
+| `src/scanner.ts` | Runs Lighthouse via Puppeteer; global mutex serialises concurrent scans; logs which audit errored when a category score is `null` |
 | `src/parser.ts` | Transforms raw `RunnerResult` into structured `ParsedResult` |
 | `src/worker.ts` | BullMQ processor: `processCrawlJob` and `processScanJob` |
 | `src/callback.ts` | Shared `postCallback()` used by both worker and server |
@@ -136,7 +136,7 @@ the authoritative "all done" signal, not a callback count.
 
 - Rate limiting: `POST /scan` capped at 20 req/min per IP
 - SSRF protection: rejects non-http(s) schemes and private IP ranges (`10.x`, `192.168.x`, `172.16–31.x`, `169.254.x`, `localhost`, IPv6 loopback)
-- Input validation: `categories` allowlist; `timeout` bounded 5,000–300,000ms; `crawl_limit` bounded 1–20
+- Input validation: `categories` allowlist; `timeout` bounded 5,000–300,000ms (default 120,000 = 2 min, applied **per strategy**); `crawl_limit` bounded 1–20
 - `SCANNER_SECRET` env var: when set, all inbound requests and outbound callbacks must carry `X-Scanner-Secret` header
 
 ### S3 storage layout (`src/storage.ts`)
@@ -159,3 +159,18 @@ fallback for public URLs).
 ### ESM/CJS note
 
 Lighthouse 10+ is ESM-only. It is dynamically imported inside `runScan()` to avoid a CJS/ESM conflict — the rest of the codebase compiles to CommonJS per `tsconfig.json`. Do not move the `import('lighthouse')` call to a top-level import.
+
+### Lighthouse network-buffer patch (patch-package)
+
+`patches/lighthouse+13.4.0.patch` is applied automatically on every install via the `postinstall` → `patch-package` hook. It raises Chrome's DevTools network buffer in Lighthouse's two `Network.enable` calls (`maxTotalBufferSize` / `maxResourceBufferSize`).
+
+**Why:** Lighthouse calls `Network.enable` with no buffer args, so Chrome uses a small default (~100MB total). On heavy pages (e.g. redis.io) the main-document response body gets **evicted from the inspector cache** before Lighthouse's `MainDocumentContent` gatherer reads it → the `charset` audit errors → Lighthouse can't compute the **best-practices** score → it comes back `null`. Chrome exposes no launch flag for this buffer; the only lever is the `Network.enable` CDP parameters, which Lighthouse owns — hence patching Lighthouse rather than Chrome.
+
+**Gotchas:**
+- The Dockerfile must `COPY patches ./patches` **before** `npm ci`, because `npm ci` runs the `postinstall` (patch-package) which needs the patch present at that moment (it runs before `COPY . .`).
+- The patch filename is version-locked (`lighthouse+13.4.0`); bumping Lighthouse stops it applying (build warns) — regenerate with `npx patch-package lighthouse` after re-editing `node_modules`.
+- Keep the buffer sizes modest. An over-large buffer inflates the worker's Node heap per scan and can contribute to OOM (see below).
+
+### Worker memory / OOM
+
+The worker is a long-lived process and Lighthouse accumulates memory across repeated in-process runs. Over many scans the Node heap can approach V8's ~2GB default and crash with `FATAL ERROR: … JavaScript heap out of memory`. This is the Node heap, **not** Chrome, and is unrelated to browser count (the shared browser runs one scan at a time). Mitigations: recycle the worker periodically, run with `--max-old-space-size`, keep the network-buffer patch modest, or run each scan in an isolated process.
