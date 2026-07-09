@@ -79,6 +79,16 @@ const DESKTOP_THROTTLING = {
   cpuSlowdownMultiplier: 1,
 };
 
+// Realistic Chrome user-agents so scans/crawls look like a real browser.
+// Without these: Lighthouse appends "Chrome-Lighthouse" to its emulated UA, and
+// headless Chrome advertises "HeadlessChrome" — both are obvious bot tells that
+// get datacenter requests 403'd (e.g. amazon.in). Keep the Chrome major version
+// roughly current so the UA stays plausible.
+export const DESKTOP_UA =
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
+export const MOBILE_UA =
+  'Mozilla/5.0 (Linux; Android 11; moto g power (2022)) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36';
+
 export const PUPPETEER_ARGS = [
   '--no-sandbox',
   '--disable-dev-shm-usage',
@@ -176,6 +186,9 @@ export async function runScan(options: ScanOptions): Promise<ScanResult> {
       logLevel: 'error' as const,
       onlyCategories: categories,
       formFactor: strategy,
+      // Override Lighthouse's default emulated UA (which contains "Chrome-Lighthouse")
+      // with a plain Chrome UA so pages don't flag the scan as a bot.
+      emulatedUserAgent: strategy === 'desktop' ? DESKTOP_UA : MOBILE_UA,
       ...(strategy === 'desktop' && { screenEmulation: DESKTOP_SCREEN }),
       // Always apply the form factor's throttling preset. Lighthouse's DEFAULT
       // throttling is mobile (slow 4G + 4× CPU), so a 'desktop' formFactor without

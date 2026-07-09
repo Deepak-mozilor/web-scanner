@@ -1,5 +1,5 @@
 import puppeteer from 'puppeteer';
-import { PUPPETEER_ARGS } from './scanner';
+import { PUPPETEER_ARGS, DESKTOP_UA } from './scanner';
 
 const SKIP_EXTENSIONS = /\.(css|js|jsx|ts|tsx|png|jpg|jpeg|gif|svg|ico|webp|woff|woff2|ttf|eot|pdf|zip|mp4|mp3|mov|avi|json|xml|txt|csv|webmanifest|rss|atom|feed)$/i;
 const SKIP_PATH_PREFIXES = ['/api/', '/static/', '/_next/', '/assets/', '/wp-content/', '/wp-admin/', '/cdn-cgi/'];
@@ -76,9 +76,10 @@ export async function crawlUrls(rootUrl: string, limit = 5): Promise<string[]> {
 
   const browser = await puppeteer.launch({
     headless: 'shell',
-    // Set the crawler's user-agent at launch instead of page.setUserAgent()
+    // Use a realistic Chrome user-agent (not "WebScanner/1.0") so sites don't
+    // serve the crawler a bot-blocked/degraded page. Set at launch instead of page.setUserAgent()
     // (the latter's signature is deprecated in newer Puppeteer).
-    args: [...PUPPETEER_ARGS, '--user-agent=Mozilla/5.0 (compatible; WebScanner/1.0)'],
+    args: [...PUPPETEER_ARGS, `--user-agent=${DESKTOP_UA}`],
   });
 
   try {
