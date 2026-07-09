@@ -1,24 +1,30 @@
 FROM node:22-slim
 
-# Install Chromium — Puppeteer will use this instead of downloading its own Chrome bundle
+# Chrome dependencies for Puppeteer's bundled Chrome (Chrome for Testing).
+# We let Puppeteer download its OWN version-matched Chrome (no PUPPETEER_SKIP_DOWNLOAD,
+# no system chromium) — Debian's chromium drifts ahead of Puppeteer and breaks launch.
+# `unzip` is required to extract the Chrome download; ca-certificates for the fetch.
 RUN apt-get update && apt-get install -y \
-  chromium \
+  ca-certificates unzip fonts-liberation \
+  libnss3 libatk1.0-0 libatk-bridge2.0-0 libcups2 \
+  libdrm2 libxkbcommon0 libxcomposite1 libxdamage1 \
+  libxfixes3 libxrandr2 libgbm1 libasound2 \
+  libnspr4 libglib2.0-0 libcairo2 libpango-1.0-0 \
+  libdbus-1-3 libexpat1 libx11-6 libxcb1 libxext6 \
   --no-install-recommends && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
 COPY package*.json ./
-# patches/ must be present BEFORE npm ci, because npm ci runs the postinstall
-# (patch-package), which applies patches/lighthouse+13.4.0.patch — raising Chrome's
-# network buffer so heavy pages don't evict the main document (charset audit fix).
+# patches/ must be present BEFORE npm ci: npm ci runs the postinstall (patch-package),
+# which applies patches/lighthouse+13.4.0.patch (raises Chrome's network buffer).
 COPY patches ./patches
-# Skip Puppeteer's bundled Chrome download — we use system Chromium installed above
-RUN PUPPETEER_SKIP_DOWNLOAD=true npm ci
+# npm ci also triggers Puppeteer's download of the pinned Chrome for Testing +
+# chrome-headless-shell (matched to the Puppeteer version) — the launchable browser.
+RUN npm ci
 
 COPY . .
 RUN npm run build && npm prune --omit=dev
-
-ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
 
 EXPOSE 3000
 
