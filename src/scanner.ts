@@ -196,15 +196,30 @@ export async function runScan(options: ScanOptions): Promise<ScanResult> {
       const benchmarkIndex = (result.lhr as { environment?: { benchmarkIndex?: number } })?.environment?.benchmarkIndex;
       console.log(`[scanner] Lighthouse finished (benchmarkIndex=${benchmarkIndex ?? '?'})`);
 
-      // Diagnostic: a null category score means an audit in that category errored
-      // (Lighthouse can't compute the weighted average). Log which audit(s) failed
-      // so null scores are explainable from the worker logs (esp. on EC2, where the
-      // Chromium build can differ from local dev).
       const lhrDiag = result.lhr as {
         runtimeError?: { code?: string; message?: string };
         categories?: Record<string, { score: number | null }>;
         audits?: Record<string, { scoreDisplayMode?: string; errorMessage?: string }>;
       };
+
+      // The page failed to load (e.g. 403 bot-block, DNS failure). Lighthouse returns
+      // an lhr with runtimeError set + every category null instead of throwing — so we
+      // must detect it here and fail the scan, otherwise the worker reports a hollow
+      // "success" with all-null scores. Reuse the client/server error split.
+      if (lhrDiag.runtimeError) {
+        const code = lhrDiag.runtimeError.code ?? 'ERRORED_DOCUMENT_REQUEST';
+        const status = CLIENT_ERROR_CODES.has(code) ? 400 : 500;
+        throw new ScanError(
+          LH_ERROR_MESSAGES[code] ?? lhrDiag.runtimeError.message ?? 'Page could not be loaded',
+          code,
+          status,
+        );
+      }
+
+      // Diagnostic: a null category score (with NO runtimeError, i.e. the page loaded)
+      // means an individual audit in that category errored (Lighthouse can't compute the
+      // weighted average). Log which audit(s) failed so null scores are explainable from
+      // the worker logs. This is a partial result — the scan still succeeds.
       const nullCats = Object.entries(lhrDiag.categories ?? {})
         .filter(([, c]) => c.score == null)
         .map(([k]) => k);
@@ -214,8 +229,7 @@ export async function runScan(options: ScanOptions): Promise<ScanResult> {
           .map(([id, a]) => `${id}: ${a.errorMessage ?? 'error'}`);
         console.warn(
           `[scanner] null category score(s) [${nullCats.join(', ')}] on ${url} (${strategy}) — ` +
-          `errored audits: ${errored.join(' | ') || 'none found'}` +
-          (lhrDiag.runtimeError ? ` — runtimeError: ${lhrDiag.runtimeError.code} ${lhrDiag.runtimeError.message}` : ''),
+          `errored audits: ${errored.join(' | ') || 'none found'}`,
         );
       }
 
