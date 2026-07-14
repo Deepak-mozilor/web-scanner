@@ -21,7 +21,11 @@ services:
   worker:
     build: .
     restart: unless-stopped
-    command: node dist/worker.js
+    # Raise V8's heap limit (default ~2GB) — Lighthouse accumulates memory across
+    # in-process runs, so a long-lived worker eventually OOMs at the default. This
+    # buys headroom; pair it with a periodic `docker compose restart worker` (cron)
+    # since the growth is unbounded. Lower WORKER_HEAP_MB on a small-RAM instance.
+    command: node --max-old-space-size=${WORKER_HEAP_MB:-4096} dist/worker.js
     # Run multiple worker CONTAINERS for true parallelism. Each container is its
     # own process (own Chrome, own global `performance` namespace), so N replicas
     # run N scans at once safely — they all pull from the shared Redis queue,

@@ -9,8 +9,10 @@ const LOCALE_ONLY_RE = /^\/[a-z]{2,3}(-[a-z]{2,4})?\/?$/i;
 // Matches /en-us/anything, /zh-cn/anything (locale-prefixed paths)
 const LOCALE_PREFIX_RE = /^\/[a-z]{2}-[a-z]{2,4}\//i;
 
-// Auth/gated page paths
-const AUTH_PATH_RE = /\/(login|signin|sign-in|log-in|signup|sign-up|register|logout|sign-out|forgot-password|reset-password|oauth|auth)\b/i;
+// Auth/gated/transactional page paths. These are login-walled or empty when
+// unauthenticated, so they never paint real content (NO_FCP → null performance)
+// and aren't useful scan targets — skip them during discovery.
+const AUTH_PATH_RE = /\/(login|signin|sign-in|log-in|signup|sign-up|register|logout|sign-out|forgot-password|reset-password|oauth|auth|account|profile|settings|dashboard|wishlist|cart|checkout|orders?|payments?)\b/i;
 
 function isValidPagePath(path: string): boolean {
   if (SKIP_EXTENSIONS.test(path)) return false;
@@ -75,7 +77,7 @@ export async function crawlUrls(rootUrl: string, limit = 5): Promise<string[]> {
   if (limit <= 1) return results;
 
   const browser = await puppeteer.launch({
-    headless: 'shell',
+    headless: true,
     // Use a realistic Chrome user-agent (not "WebScanner/1.0") so sites don't
     // serve the crawler a bot-blocked/degraded page. Set at launch instead of page.setUserAgent()
     // (the latter's signature is deprecated in newer Puppeteer).
